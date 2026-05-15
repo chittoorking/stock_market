@@ -1,0 +1,64 @@
+# Framework & Web
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+websockets==13.1
+httpx==0.27.2
+aiohttp==3.10.5
+python-multipart==0.0.12
+
+# Database & Caching
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+redis==5.1.1
+aioredis==2.0.1
+
+# AI / LLM
+openai==1.51.0
+langchain-core==0.3.10
+langchain-openai==0.2.2
+crewai==1.11.1
+crewai-tools==0.13.2
+
+# Trading & Market Data
+pandas==2.2.3
+pandas-ta==0.3.14b
+numpy==2.1.1
+yfinance==0.2.43
+ccxt==4.4.15
+websocket-client==1.8.0
+
+# Broker SDKs
+kiteconnect==5.0.1
+
+# Backtesting
+vectorbt==0.26.2
+
+# Config & Utils
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+structlog==24.4.0
+
+# Scheduling
+apscheduler==3.10.4
+
+# Notifications
+python-telegram-bot==21.6
+slack-sdk==3.33.1
+
+# PDF / Charts
+reportlab==4.2.2
+matplotlib==3.9.2
+
+# Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Circuit Breaker & Rate Limiting
+pybreaker==1.2.0
+
+# Observability
+langfuse==2.51.3
+
+# Timezone
+tzdata==2024.2

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arjun — Autonomous Trading Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0a0e17; --surface: #111827; --surface2: #1a2332;
+            --border: #1e293b; --text: #e2e8f0; --muted: #64748b;
+            --green: #10b981; --red: #ef4444; --blue: #3b82f6;
+            --yellow: #f59e0b; --purple: #8b5cf6;
+        }
+        body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); font-size: 13px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; padding: 12px; max-width: 1800px; margin: 0 auto; }
+        .grid-full { grid-column: 1 / -1; }
+        .grid-2 { grid-column: span 2; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+        .card h3 { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+        .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 16px; font-weight: 600; }
+        .header .status { display: flex; gap: 16px; font-size: 12px; }
+        .header .status .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+        .dot-green { background: var(--green); }
+        .dot-red { background: var(--red); }
+        .dot-yellow { background: var(--yellow); }
+
+        /* Metrics */
+        .metrics { display: flex; gap: 24px; flex-wrap: wrap; }
+        .metric { flex: 1; min-width: 120px; }
+        .metric .value { font-size: 24px; font-weight: 700; }
+        .metric .label { color: var(--muted); font-size: 11px; margin-top: 2px; }
+        .positive { color: var(--green); }
+        .negative { color: var(--red); }
+
+        /* Signal board */
+        .signal { background: var(--surface2); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; border-left: 3px solid var(--muted); }
+        .signal.long { border-left-color: var(--green); }
+        .signal.short { border-left-color: var(--red); }
+        .signal .top { display: flex; justify-content: space-between; align-items: center; }
+        .signal .strategy { background: var(--bg); padding: 2px 8px; border-radius: 4px; font-size: 10px; text-transform: uppercase; }
+        .signal .score { font-weight: 700; }
+        .signal .details { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+        /* Positions */
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+        td { padding: 8px 6px; border-bottom: 1px solid var(--border); }
+
+        /* RL Weights */
+        .weight-bar { display: flex; align-items: center; margin-bottom: 6px; }
+        .weight-bar .name { width: 80px; font-size: 11px; color: var(--muted); }
+        .weight-bar .bar { flex: 1; height: 16px; background: var(--bg); border-radius: 4px; overflow: hidden; margin: 0 8px; }
+        .weight-bar .fill { height: 100%; background: var(--blue); border-radius: 4px; transition: width 0.5s; }
+        .weight-bar .val { width: 40px; text-align: right; font-size: 11px; }
+
+        /* Event log */
+        .log { max-height: 300px; overflow-y: auto; }
+        .log-entry { padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 11px; display: flex; gap: 8px; }
+        .log-entry .time { color: var(--muted); min-width: 60px; }
+        .log-entry .type { min-width: 120px; font-weight: 600; }
+        .log-entry.signal { color: var(--blue); }
+        .log-entry.trade { color: var(--green); }
+        .log-entry.risk { color: var(--red); }
+        .log-entry.regime { color: var(--yellow); }
+
+        /* Controls */
+        .controls { display: flex; gap: 8px; }
+        .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 11px; font-family: inherit; }
+        .btn:hover { background: var(--border); }
+        .btn-green { border-color: var(--green); color: var(--green); }
+        .btn-red { border-color: var(--red); color: var(--red); }
+
+        /* Equity chart placeholder */
+        .chart-placeholder { height: 200px; background: var(--surface2); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Arjun — Autonomous Trading Agent</h1>
+        <div class="status">
+            <span><span class="dot" id="dot-pipeline"></span> Pipeline: <span id="pipeline-status">--</span></span>
+            <span><span class="dot" id="dot-feed"></span> Feed: <span id="feed-status">--</span></span>
+            <span>Regime: <span id="market-regime">--</span></span>
+        </div>
+        <div class="controls">
+            <button class="btn btn-green" onclick="startPipeline()">Start</button>
+            <button class="btn btn-red" onclick="stopPipeline()">Stop</button>
+            <button class="btn" onclick="runBacktest()">Backtest</button>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Row 1: Key Metrics -->
+        <div class="card grid-full">
+            <h3>Today's Performance</h3>
+            <div class="metrics">
+                <div class="metric"><div class="value" id="daily-pnl">--</div><div class="label">Daily P&L</div></div>
+                <div class="metric"><div class="value" id="total-trades">--</div><div class="label">Trades</div></div>
+                <div class="metric"><div class="value" id="win-rate">--</div><div class="label">Win Rate</div></div>
+                <div class="metric"><div class="value" id="open-positions">--</div><div class="label">Open Positions</div></div>
+                <div class="metric"><div class="value" id="exposure">--</div><div class="label">Exposure</div></div>
+                <div class="metric"><div class="value" id="signals-today">--</div><div class="label">Signals</div></div>
+                <div class="metric"><div class="value" id="conversion-rate">--</div><div class="label">Conversion</div></div>
+            </div>
+        </div>
+
+        <!-- Row 2: Signal Board + Positions -->
+        <div class="card">
+            <h3>Active Signals</h3>
+            <div id="signal-board"><div class="signal"><div class="details">Waiting for signals...</div></div></div>
+        </div>
+
+        <div class="card grid-2">
+            <h3>Open Positions</h3>
+            <table>
+                <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Current</th><th>P&L</th><th>SL</th><th>TP</th><th>Strategy</th></tr></thead>
+                <tbody id="positions-table"><tr><td colspan="8" style="color:var(--muted)">No open positions</td></tr></tbody>
+            </table>
+        </div>
+
+        <!-- Row 3: RL Weights + Context + Equity -->
+        <div class="card">
+            <h3>RL Indicator Weights</h3>
+            <div id="rl-weights">
+                <div class="weight-bar"><span class="name">RSI</span><div class="bar"><div class="fill" style="width:20%"></div></div><span class="val">20%</span></div>
+                <div class="weight-bar"><span class="name">MACD</span><div class="bar"><div class="fill" style="width:20%"></div></div><span class="val">20%</span></div>
+                <div class="weight-bar"><span class="name">Bollinger</span><div class="bar"><div class="fill" style="width:15%"></div></div><span class="val">15%</span></div>
+                <div class="weight-bar"><span class="name">Volume</span><div class="bar"><div class="fill" style="width:15%"></div></div><span class="val">15%</span></div>
+                <div class="weight-bar"><span class="name">Trend</span><div class="bar"><div class="fill" style="width:15%"></div></div><span class="val">15%</span></div>
+                <div class="weight-bar"><span class="name">Sentiment</span><div class="bar"><div class="fill" style="width:15%"></div></div><span class="val">15%</span></div>
+            </div>
+            <div style="margin-top:12px">
+                <h3>Strategy Trust</h3>
+                <div id="strategy-trust"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Market Context</h3>
+            <div id="market-context" style="font-size:12px; color:var(--muted)">Loading...</div>
+        </div>
+
+        <div class="card">
+            <h3>Equity Curve</h3>
+            <div class="chart-placeholder" id="equity-chart">Connect SSE to see live equity</div>
+        </div>
+
+        <!-- Row 4: Event Log -->
+        <div class="card grid-full">
+            <h3>Event Log</h3>
+            <div class="log" id="event-log">
+                <div class="log-entry"><span class="time">--:--</span><span class="type">SYSTEM</span><span>Dashboard loaded. Connect to SSE stream to see live events.</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const BASE = window.location.origin;
+        const SESSION = 'auto';
+
+        // SSE connection for real-time updates
+        let eventSource = null;
+
+        function connectSSE() {
+            eventSource = new EventSource(`${BASE}/stream/${SESSION}`);
+            eventSource.onmessage = (e) => {
+                const event = JSON.parse(e.data);
+                handleEvent(event);
+            };
+            eventSource.onerror = () => {
+                setTimeout(connectSSE, 3000);
+            };
+        }
+
+        function handleEvent(event) {
+            const type = event.event_type || event.type || '';
+
+            // Add to event log
+            addLogEntry(type, JSON.stringify(event.data || event).substring(0, 200));
+
+            // Route to appropriate updater
+            if (type === 'portfolio') updatePortfolio(event);
+            if (type === 'signal') addSignal(event);
+            if (type === 'trade_executed') refreshPositions();
+            if (type === 'position_update') refreshPositions();
+            if (type === 'risk_alert') highlightRisk(event);
+        }
+
+        function addLogEntry(type, message) {
+            const log = document.getElementById('event-log');
+            const now = new Date().toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+            const cls = type.includes('SIGNAL') ? 'signal' : type.includes('TRADE') ? 'trade' : type.includes('RISK') ? 'risk' : type.includes('REGIME') ? 'regime' : '';
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${cls}`;
+            entry.innerHTML = `<span class="time">${now}</span><span class="type">${type}</span><span>${message}</span>`;
+            log.prepend(entry);
+            if (log.children.length > 100) log.removeChild(log.lastChild);
+        }
+
+        function addSignal(event) {
+            const board = document.getElementById('signal-board');
+            const dir = (event.strength || '').includes('BUY') ? 'long' : 'short';
+            const html = `<div class="signal ${dir}">
+                <div class="top">
+                    <span><strong>${event.symbol}</strong> ${event.strength}</span>
+                    <span class="strategy">${event.indicator || 'agent'}</span>
+                    <span class="score">${((event.confidence || 0) * 100).toFixed(0)}%</span>
+                </div>
+                <div class="details">Entry: ${event.entry_suggested || '-'} | SL: ${event.sl_suggested || '-'} | TP: ${event.tp_suggested || '-'}</div>
+            </div>`;
+            board.innerHTML = html + board.innerHTML;
+            if (board.children.length > 8) board.removeChild(board.lastChild);
+        }
+
+        function updatePortfolio(event) {
+            const el = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+            const pnl = event.daily_pnl || event.total_pnl || 0;
+            el('daily-pnl', `₹${pnl.toLocaleString('en-IN', {maximumFractionDigits:0, signDisplay:'always'})}`);
+            document.getElementById('daily-pnl').className = `value ${pnl >= 0 ? 'positive' : 'negative'}`;
+        }
+
+        // Periodic polling for dashboard data
+        async function refreshDashboard() {
+            try {
+                // Pipeline status
+                const status = await fetch(`${BASE}/auto/status`).then(r => r.json());
+                document.getElementById('pipeline-status').textContent = status.status || '--';
+                document.getElementById('dot-pipeline').className = `dot ${status.status === 'running' ? 'dot-green' : 'dot-red'}`;
+                document.getElementById('total-trades').textContent = status.trades_today || '0';
+                const pnl = status.pnl_today || 0;
+                document.getElementById('daily-pnl').textContent = `₹${pnl.toLocaleString('en-IN', {maximumFractionDigits:0, signDisplay:'always'})}`;
+                document.getElementById('daily-pnl').className = `value ${pnl >= 0 ? 'positive' : 'negative'}`;
+
+                // Positions
+                const positions = await fetch(`${BASE}/portfolio/positions`).then(r => r.json());
+                document.getElementById('open-positions').textContent = positions.count || '0';
+                updatePositionsTable(positions.positions || []);
+
+                // Market context
+                const ctx = await fetch(`${BASE}/events/context/agent-snapshot?session_id=${SESSION}`).then(r => r.json());
+                document.getElementById('market-context').innerHTML = (ctx.snapshot || 'No data').replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+                // RL weights
+                const learning = await fetch(`${BASE}/auto/learning/${SESSION}`).then(r => r.json()).catch(() => null);
+                if (learning && learning.current_weights) updateWeights(learning.current_weights);
+
+                // Audit stats
+                const audit = await fetch(`${BASE}/events/audit/stats?session_id=${SESSION}`).then(r => r.json()).catch(() => null);
+                if (audit) {
+                    document.getElementById('signals-today').textContent = audit.signals_generated || '0';
+                    document.getElementById('conversion-rate').textContent = `${((audit.conversion_rate || 0) * 100).toFixed(0)}%`;
+                }
+
+            } catch (e) {
+                console.error('Dashboard refresh error:', e);
+            }
+        }
+
+        function updatePositionsTable(positions) {
+            const tbody = document.getElementById('positions-table');
+            if (!positions.length) {
+                tbody.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">No open positions</td></tr>';
+                return;
+            }
+            tbody.innerHTML = positions.map(p => {
+                const pnl = p.unrealized_pnl || 0;
+                const cls = pnl >= 0 ? 'positive' : 'negative';
+                return `<tr>
+                    <td><strong>${p.symbol}</strong></td>
+                    <td>${p.side}</td>
+                    <td>₹${(p.avg_entry_price || 0).toFixed(2)}</td>
+                    <td>₹${(p.current_price || 0).toFixed(2)}</td>
+                    <td class="${cls}">₹${pnl.toFixed(0)}</td>
+                    <td>${p.stop_loss ? '₹' + p.stop_loss.toFixed(2) : '-'}</td>
+                    <td>${p.take_profit ? '₹' + p.take_profit.toFixed(2) : '-'}</td>
+                    <td>${p.strategy || '-'}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function updateWeights(weights) {
+            const container = document.getElementById('rl-weights');
+            container.innerHTML = Object.entries(weights).map(([name, val]) => {
+                const pct = (val * 100).toFixed(1);
+                return `<div class="weight-bar">
+                    <span class="name">${name}</span>
+                    <div class="bar"><div class="fill" style="width:${pct}%"></div></div>
+                    <span class="val">${pct}%</span>
+                </div>`;
+            }).join('');
+        }
+
+        function highlightRisk(event) {
+            addLogEntry('RISK_ALERT', `${event.alert_type}: ${event.details}`);
+        }
+
+        async function startPipeline() {
+            await fetch(`${BASE}/auto/start`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({session_id: SESSION}) });
+            addLogEntry('SYSTEM', 'Pipeline start requested');
+            refreshDashboard();
+        }
+
+        async function stopPipeline() {
+            await fetch(`${BASE}/auto/stop`, { method: 'POST' });
+            addLogEntry('SYSTEM', 'Pipeline stop requested');
+            refreshDashboard();
+        }
+
+        async function runBacktest() {
+            addLogEntry('SYSTEM', 'Backtest requested — check /auto/backtest endpoint');
+            const resp = await fetch(`${BASE}/auto/backtest`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({session_id: 'backtest-dash'}) }).then(r => r.json()).catch(() => ({error:'Endpoint not configured'}));
+            addLogEntry('BACKTEST', JSON.stringify(resp).substring(0, 300));
+        }
+
+        // Initialize
+        connectSSE();
+        refreshDashboard();
+        setInterval(refreshDashboard, 10000); // Refresh every 10s
+    </script>
+</body>
+</html>
