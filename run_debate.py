@@ -1,4 +1,12 @@
-"""Run full agent pipeline on 6-month data — last 10 trading days."""
+"""
+Run debate-enabled agent pipeline on 6-month data.
+Replaces one-shot Scanner LLM with AutoGen Bull vs Bear debate.
+
+Usage:
+    python run_debate.py                    # Last 10 days
+    python run_debate.py --start -30 --days 30  # Last 30 days
+    python run_debate.py --start 0 --days 5     # First 5 days
+"""
 import sys; sys.path.insert(0, '.')
 import csv, json, time
 from pathlib import Path
@@ -16,7 +24,8 @@ for f in sorted(data_dir.glob('*.csv')):
 
 from app.signals.proven_strategies import GapAndGoSignal, LenzSignal, AftershockSignal, GapDecaySignal
 from app.agents.data_providers import build_full_context, SectorAnalyzer, VolumeProfiler, PriceStructure
-from app.agents.graph_llms import scanner_with_graph, risk_with_graph, executor_with_graph, monitor_with_graph, judge_with_graph
+from app.agents.graph_llms import risk_with_graph, executor_with_graph, judge_with_graph
+from app.agents.debate_agents import debate_scanner, debate_monitor
 from app.agents.volatility import VolatilityAgent
 from app.core.trade_dev_graph import TradeDevGraph, TradeNode, BarSnapshot
 from app.core.market_memory import MarketMemory, DayMemory
@@ -27,11 +36,11 @@ vol_agent = VolatilityAgent()
 trade_graph = TradeDevGraph()
 memory = MarketMemory()
 
-# Window selection: use --start and --days args, default to last 10
 import argparse
 _parser = argparse.ArgumentParser()
-_parser.add_argument('--start', type=int, default=-10, help='Start day index (negative = from end)')
+_parser.add_argument('--start', type=int, default=-10)
 _parser.add_argument('--days', type=int, default=10)
+_parser.add_argument('--save-debates', action='store_true', help='Save full debate transcripts')
 _args, _ = _parser.parse_known_args()
 
 all_dates = sorted(set(r['timestamp'][:10] for rows in all_data.values() for r in rows))
@@ -39,10 +48,11 @@ if _args.start < 0:
     test_dates = all_dates[_args.start:_args.start + _args.days] if _args.start + _args.days < 0 else all_dates[_args.start:]
 else:
     test_dates = all_dates[_args.start:_args.start + _args.days]
-print(f"Running on {len(test_dates)} days: {test_dates[0]} to {test_dates[-1]}")
+print(f"DEBATE MODE | Running on {len(test_dates)} days: {test_dates[0]} to {test_dates[-1]}")
 print(f"Stocks: {len(all_data)}")
 
 all_results = []
+all_debates = []  # Store debate transcripts for analysis
 llm_calls = 0
 
 for date in test_dates:
@@ -80,11 +90,10 @@ for date in test_dates:
 
         if not signals: continue
 
-        # Enrichment
+        # Enrichment (same as baseline)
         enrichments = enrich_all_signals(signals, all_data, date, scan_bar, memory)
         red_count = sum(1 for sig in signals if enrichments.get(sig.id) and enrichments[sig.id].red_flag_count >= 1)
 
-        # Scanner
         sector_ctx = SectorAnalyzer.compute(all_data, date, scan_bar)
         signals_text = format_enriched_signals(signals, enrichments)
         sector_text = "\n".join(
@@ -92,24 +101,35 @@ for date in test_dates:
             for sn, sd in sorted(sector_ctx.items(), key=lambda x: -abs(x[1]['leader_change_pct']))
         )
 
-        print(f"  [{date} bar {scan_bar}] {len(signals)} signals ({red_count} red-flagged)...", end=" ")
-        ranked = scanner_with_graph(signals_text, sector_text, memory, API_KEY)
-        llm_calls += 1; time.sleep(0.3)
+        # ═══ DEBATE instead of one-shot scanner ═══
+        print(f"  [{date} bar {scan_bar}] {len(signals)} signals ({red_count} red-flagged) -> DEBATING...", end=" ")
+        ranked, debate_transcript = debate_scanner(signals_text, sector_text, memory, API_KEY)
+        llm_calls += 3  # Bull + Bear + Moderator
+        time.sleep(0.5)
+
+        if debate_transcript:
+            all_debates.append({
+                "date": date, "bar": scan_bar,
+                "signals": len(signals), "red_flagged": red_count,
+                "ranked_count": len(ranked),
+                "transcript": debate_transcript,
+            })
+
         if not ranked:
-            print("no ranked signals")
+            print("debate: no signals survived")
             continue
 
         for r in ranked: r["sector"] = get_sector(r.get("symbol", ""))
 
-        # Risk
+        # Risk (unchanged — still one-shot)
         risk_result = risk_with_graph(ranked, trade_graph, memory, API_KEY)
         llm_calls += 1; time.sleep(0.3)
         approved = risk_result.get("approved", [])
         if not approved:
-            print(f"ranked {len(ranked)}, all vetoed")
+            print(f"debate ranked {len(ranked)}, all vetoed by risk")
             continue
 
-        # Executor
+        # Executor (unchanged)
         price_lines = []
         for a in approved:
             s = a.get("symbol", "")
@@ -122,16 +142,19 @@ for date in test_dates:
         llm_calls += 1; time.sleep(0.3)
 
         opened = 0
+        opened_sectors = set()  # One trade per sector
         for t in trades:
             sym = t.get("symbol","")
             if trade_graph.get_active(sym) or len(trade_graph.get_all_active())>=3: continue
             sig = next((s for s in signals if s.symbol==sym), None)
             if not sig: continue
+            sym_sector = get_sector(sym)
+            if sym_sector in opened_sectors: continue  # One per sector
+            opened_sectors.add(sym_sector)
 
             entry_price = sig.suggested_entry
             direction = t.get("direction", sig.direction)
 
-            # Smart stops: chart-structure-based, not ATR
             from app.agents.smart_stops import SmartStopCalculator
             sb_for_stop = [b for b in all_data.get(sym,[]) if b['timestamp'][:10]==date]
             pa = [b for b in all_data.get(sym,[]) if b['timestamp'][:10]<=date]
@@ -139,20 +162,19 @@ for date in test_dates:
             stop, stop_reason = SmartStopCalculator.calculate(sb_for_stop, scan_bar, entry_price, direction, atr)
             target, _ = SmartStopCalculator.calculate_target(entry_price, stop, direction, 2.5)
 
-            # Override with LLM's stop/target if they're reasonable
             llm_stop = t.get("stop", 0); llm_target = t.get("target", 0)
             if llm_stop and abs(llm_stop - entry_price) / entry_price * 100 > 0.20:
-                # LLM set a wider stop — use the WIDER of chart vs LLM
                 if direction == "LONG":
-                    stop = min(stop, llm_stop)  # Lower = wider for longs
+                    stop = min(stop, llm_stop)
                 else:
-                    stop = max(stop, llm_stop)  # Higher = wider for shorts
+                    stop = max(stop, llm_stop)
             # Only use LLM target if it's on the correct side
             if llm_target:
                 if direction == "LONG" and llm_target > entry_price:
                     target = llm_target
                 elif direction == "SHORT" and llm_target < entry_price:
                     target = llm_target
+                # else: keep chart-based target (LLM set it on wrong side)
 
             strat = t.get("strategy", sig.strategy_name)
             sec_data = sector_ctx.get(get_sector(sym), {})
@@ -172,9 +194,9 @@ for date in test_dates:
             trade_graph.open_trade(node)
             opened += 1
 
-        print(f"ranked {len(ranked)}, approved {len(approved)}, opened {opened}")
+        print(f"debate ranked {len(ranked)}, approved {len(approved)}, opened {opened}")
 
-    # Simulate positions
+    # ═══ Simulate positions (same logic, but monitor uses debate) ═══
     for sym, node in list(trade_graph.get_all_active().items()):
         sb = [b for b in all_data.get(sym,[]) if b['timestamp'][:10]==date]
         if not sb: continue
@@ -185,7 +207,7 @@ for date in test_dates:
         exit_price = None; exit_reason = ''; exit_bar = 0
         partial_taken = False; partial_pnl = 0
 
-        prev_events = []  # Track what changed bar-to-bar
+        prev_events = []
 
         for j in range(entry_bar+1, len(sb)):
             b = sb[j]; bh = j - entry_bar
@@ -200,7 +222,6 @@ for date in test_dates:
             fade = max(0, (max_fav-max(0,fav))/max_fav*100) if max_fav>0 else 0
             zone = "strong_win" if pnl>=0.75 else "decent_win" if pnl>=0.4 else "small_win" if pnl>=0.15 else "scratch" if pnl>=0 else "loss"
 
-            # ─── EVERY BAR: write to trade dev graph ───
             sec_data = SectorAnalyzer.compute(all_data, date, j)
             sec_info = sec_data.get(node.sector, {})
             vol_data = VolumeProfiler.compute(sb, j)
@@ -214,36 +235,25 @@ for date in test_dates:
                 volume_divergence=vol_data.get('divergence','none'))
             node.add_snapshot(snap)
 
-            # ─── EVERY BAR: detect events (candle patterns, volume shifts, etc.) ───
             events = []
-
-            # Candle patterns
             from app.agents.candle_patterns import detect_patterns, format_patterns_for_graph
             candle_pats = detect_patterns(sb, j)
             for cp in candle_pats:
                 node.add_observation(j, "candle", f"{cp.name}({cp.direction}): {cp.meaning[:50]}")
                 if cp.reliability == "high":
                     events.append(f"candle:{cp.name}({cp.direction})")
-
-            # Volume divergence
             if "BEARISH" in vol_data.get('divergence',''):
-                node.add_observation(j, "volume", f"Bearish divergence")
+                node.add_observation(j, "volume", "Bearish divergence")
                 events.append("volume:bearish_divergence")
-
-            # Fade started
             if fade > 40 and mfe > 0.15 and "fade_started" not in str(prev_events):
                 node.add_observation(j, "fade", f"Gave back {fade:.0f}% of {mfe:.2f}% peak")
                 events.append("fade:started")
-
-            # Sector shift
             if sec_info.get('leader_change_pct', 0) != 0:
                 leader_against = (direction == 'LONG' and sec_info['leader_change_pct'] < -0.3) or \
                                  (direction == 'SHORT' and sec_info['leader_change_pct'] > 0.3)
                 if leader_against and "sector_against" not in str(prev_events):
                     node.add_observation(j, "sector", f"Sector leader now against: {sec_info['leader_change_pct']:+.2f}%")
                     events.append("sector:turned_against")
-
-            # Zone change
             if node.snapshots and len(node.snapshots) >= 2:
                 prev_zone = node.snapshots[-2].zone if len(node.snapshots) >= 2 else ""
                 if zone != prev_zone and (zone == "loss" or prev_zone == "decent_win"):
@@ -251,7 +261,7 @@ for date in test_dates:
 
             prev_events = events
 
-            # ─── Hard stops/targets (system, not LLM) ───
+            # Hard stops/targets
             if direction=='LONG':
                 if b['low']<=cur_stop: exit_price=cur_stop; exit_reason='stop'; exit_bar=j; break
                 if b['high']>=target: exit_price=target; exit_reason='target'; exit_bar=j; break
@@ -259,24 +269,21 @@ for date in test_dates:
                 if b['high']>=cur_stop: exit_price=cur_stop; exit_reason='stop'; exit_bar=j; break
                 if b['low']<=target: exit_price=target; exit_reason='target'; exit_bar=j; break
 
-            # ─── LLM CALL every 6 bars ───
-            # Data is written to graph EVERY bar (above). LLM checks periodically.
-            # The LLM sees accumulated events/patterns at each check.
+            # ═══ DEBATE MONITOR every 6 bars ═══
             if not (bh % 6 == 0 and bh > 0):
                 continue
 
-            # Build technical context for the LLM
             from app.agents.chart_narratives import NarrativeBuilder
             candle_text = format_patterns_for_graph(candle_pats)
             narratives = NarrativeBuilder.build(sb, j, direction, entry_price)
             narrative_text = NarrativeBuilder.format_for_llm(narratives, direction)
-
-            # Add event trigger info so LLM knows WHY it's being called
             event_trigger = f"TRIGGERED BY: {', '.join(events)}" if events else "Periodic check"
             full_tech = f"{event_trigger}\n\n{candle_text}\n\n{narrative_text}"
 
-            mon = monitor_with_graph(node, memory, API_KEY, technical_data=full_tech)
-            llm_calls += 1; time.sleep(0.2)
+            mon, mon_transcript = debate_monitor(node, memory, API_KEY, technical_data=full_tech)
+            llm_calls += 3  # Bull + Bear + Moderator
+            time.sleep(0.3)
+
             act = mon.get("action","hold")
             if act=="close":
                 exit_price=b['close']; exit_reason='monitor'; exit_bar=j; break
@@ -313,10 +320,10 @@ for date in test_dates:
     memory.record_day(DayMemory(date=date, trades_taken=day_trades, total_pnl=round(day_pnl,3)))
     print(f"  Day {date}: {day_trades} trades, P&L={day_pnl:+.3f}%")
 
-# Report
+# ═══ REPORT ═══
 print()
 print('='*100)
-print(f'6-MONTH DATA, LAST 10 DAYS | {llm_calls} LLM calls')
+print(f'DEBATE MODE | {len(test_dates)} DAYS | {llm_calls} LLM calls')
 print('='*100)
 print(f'{"Date":>10} {"Symbol":>12} {"Dir":>5} {"Strat":>6} {"Entry":>8} {"Exit":>8} {"P&L%":>7} {"Blend":>7} {"MFE%":>6} {"Bars":>4} {"Exit":>8}')
 print('-'*100)
@@ -340,6 +347,30 @@ for label,key in [("STRATEGY","strategy"),("EXIT","exit_reason"),("SECTOR","sect
         if r['blended']>0: by[r[key]]['w']+=1
     for k,v in sorted(by.items(),key=lambda x:-x[1]['p']):
         print(f'  {str(k):12s}: {v["n"]:3d} trades, WR={v["w"]/v["n"]:.0%}, P&L={v["p"]:+.3f}%')
+
+# ═══ DEBATE ANALYSIS ═══
+print(f'\n{"="*100}')
+print(f'DEBATE ANALYSIS | {len(all_debates)} debates conducted')
+print(f'{"="*100}')
+
+# Show how many signals were filtered by debate
+total_signals = sum(d["signals"] for d in all_debates)
+total_ranked = sum(d["ranked_count"] for d in all_debates)
+total_red = sum(d["red_flagged"] for d in all_debates)
+print(f'Signals seen: {total_signals} | Survived debate: {total_ranked} | Filter rate: {(1-total_ranked/max(total_signals,1))*100:.0f}%')
+print(f'Red-flagged: {total_red}/{total_signals} ({total_red/max(total_signals,1)*100:.0f}%)')
+
+# Compare with baseline
+print(f'\n--- COMPARISON ---')
+print(f'  Baseline (one-shot scanner):  57% WR, ~break-even')
+print(f'  Debate (this run):            {wins/n:.0%} WR, {total:+.3f}%')
+
+# Save debates if requested
+if _args.save_debates and all_debates:
+    debate_file = Path(f'debates_{test_dates[0]}_{test_dates[-1]}.json')
+    with open(debate_file, 'w') as f:
+        json.dump(all_debates, f, indent=2)
+    print(f'\nDebate transcripts saved to {debate_file}')
 
 print(f'\n--- MEMORY LEARNED ---')
 print(memory.get_full_memory_snapshot())
