@@ -246,6 +246,33 @@ class TradeDevGraph:
             f"total P&L={total_pnl:+.3f}%"
         )
 
+    # ─── Pre-entry signal development ───
+    # These hold setup events BEFORE a trade is opened.
+    # System writes as bars develop, Verifier agent queries before debate.
+    _signal_events: Dict[str, List[Dict]] = None  # symbol -> [{bar, event}]
+
+    def _ensure_signal_events(self):
+        if self._signal_events is None:
+            self._signal_events = {}
+
+    def write_signal_event(self, symbol: str, bar: int, event: str):
+        """System writes a setup development event as it observes it."""
+        self._ensure_signal_events()
+        self._signal_events.setdefault(symbol, []).append({"bar": bar, "event": event})
+
+    def query_signal_development(self, symbol: str) -> str:
+        """Verifier agent asks: what was this signal doing before entry?
+        Returns simple facts — volume behavior, sector behavior, breadth behavior."""
+        self._ensure_signal_events()
+        events = self._signal_events.get(symbol, [])
+        if not events:
+            return f"No development history for {symbol}."
+        return "\n".join(f"  bar {e['bar']}: {e['event']}" for e in events)
+
+    def clear_signal_events(self):
+        """Clear after scan window processed."""
+        self._signal_events = {}
+
     def query_common_exit_patterns(self) -> str:
         """What are the most common exit patterns?"""
         if not self._closed:

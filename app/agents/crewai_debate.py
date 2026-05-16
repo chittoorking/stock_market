@@ -40,8 +40,17 @@ class DebateTrace:
     monitor_decision: str = ""
 
 
-def _get_llm(api_key: str) -> LLM:
-    """Create a CrewAI-compatible LLM."""
+def _get_llm(api_key: str, reasoning: bool = False) -> LLM:
+    """Create a CrewAI-compatible LLM.
+    reasoning=True uses o3-mini (chain-of-thought reasoning).
+    reasoning=False uses gpt-4o-mini (fast, cheap).
+    """
+    if reasoning:
+        return LLM(
+            model="openai/o3-mini",
+            api_key=api_key,
+            max_completion_tokens=2000,
+        )
     return LLM(
         model="openai/gpt-4o-mini",
         api_key=api_key,
@@ -59,17 +68,39 @@ def debate_scanner(
     sector_context: str,
     memory: MarketMemory,
     api_key: str,
+    setup_verification: str = "",
+    reasoning: bool = False,
 ) -> tuple[List[Dict], DebateTrace]:
     """
     CrewAI debate replaces one-shot scanner.
     Returns (ranked_signals, full_trace).
+    setup_verification: simple facts from the graph about how each signal developed.
+    reasoning: use o3-mini reasoning model instead of gpt-4o-mini.
     """
     os.environ["OPENAI_API_KEY"] = api_key
     memory_text = memory.get_full_memory_snapshot()
-    llm = _get_llm(api_key)
+    llm = _get_llm(api_key, reasoning=reasoning)
     trace = DebateTrace(signals_count=len(signals_text.split('\n')))
 
-    # --- Agents ---
+    # --- Agents (4 now: Verifier -> Bull -> Bear -> Moderator) ---
+
+    verifier = Agent(
+        role="Setup Verifier",
+        goal="Read the setup history from the graph and give a simple verdict for each signal",
+        backstory=(
+            "You verify trade setups by reading how they developed over time. "
+            "You receive simple facts from the graph: volume behavior, sector behavior, "
+            "breadth behavior, price action quality. "
+            "Your job: for each signal, give a ONE-LINE verdict. "
+            "VERIFIED = evidence built consistently. "
+            "WARNING = something is off (volume dying, breadth against). "
+            "REJECTED = primary evidence is against. "
+            "Be brief. The Bull and Bear will use your verdict as input."
+        ),
+        verbose=True,
+        llm=llm,
+    )
+
     bull = Agent(
         role="Bull Trading Analyst",
         goal="Build the strongest possible case FOR the best trading signals",
@@ -78,8 +109,9 @@ def debate_scanner(
             "You find reasons to take trades. You look for GREEN flags, sector alignment, "
             "volume confirmation, morning alignment, and historical edge. "
             "Be specific with numbers. Don't just say 'looks good' - cite RVOL values, "
-            "sector percentages, breadth counts. Morning alignment (price moving WITH direction) "
-            "is the #1 winner predictor - 100% of past winners had it."
+            "sector percentages, breadth counts. "
+            "The Verifier has already checked how each setup developed. "
+            "Consider the Verifier's verdict but argue your case."
         ),
         verbose=True,
         llm=llm,
@@ -93,7 +125,9 @@ def debate_scanner(
             "sector against direction, counter-gap trades, entry bar spikes, choppy price. "
             "Be specific. 'Unknown sector' alone is NOT a strong objection - focus on "
             "hard data like volume collapse, trading against gap AND morning move, "
-            "or 0% historical WR. Minor cautions (YELLOW flags) are NOT deal-breakers."
+            "or 0% historical WR. Minor cautions (YELLOW flags) are NOT deal-breakers. "
+            "The Verifier has already checked how each setup developed. "
+            "If the Verifier flagged WARNING or REJECTED, dig deeper into why."
         ),
         verbose=True,
         llm=llm,
@@ -101,41 +135,61 @@ def debate_scanner(
 
     moderator = Agent(
         role="Trading Moderator",
-        goal="Read Bull and Bear arguments, score each signal 1-10, output ranked JSON",
+        goal="Read Verifier, Bull and Bear arguments, score each signal 1-10, output ranked JSON",
         backstory=(
-            "You are the final decision maker. You've read Bull's case and Bear's objections. "
-            "You are a TRADER, not a risk manager - your job is to find winners.\n"
+            "You are the final decision maker. You've read the Verifier's setup check, "
+            "Bull's case, and Bear's objections. You are a TRADER, not a risk manager.\n"
             "RULES:\n"
-            "1. Morning alignment + 2 GREEN flags = score 7+ minimum\n"
-            "2. RED flags are warnings, not vetoes. Only skip if trading against BOTH gap AND morning move\n"
-            "3. You MUST take at least 1 signal if any has morning alignment + sector support\n"
+            "1. Verifier REJECTED = do NOT take (score < 6) unless Bull has exceptional evidence\n"
+            "2. Verifier WARNING = treat with caution, need strong Bull case to override\n"
+            "3. Verifier VERIFIED = setup developed well, lean toward taking\n"
             "4. Max 3 signals. Quality over quantity\n"
             "5. Output ONLY valid JSON: {\"ranked\": [{\"symbol\": \"X\", \"direction\": \"LONG\", "
-            "\"strategy\": \"lnz3\", \"score\": 8, \"reason\": \"Bull: [strength]. Bear: [concern]. "
-            "Decision: [why]\"}]}\n"
+            "\"strategy\": \"lnz3\", \"score\": 8, \"reason\": \"Verifier: [verdict]. Bull: [strength]. "
+            "Bear: [concern]. Decision: [why]\"}]}\n"
             "Only include score >= 6."
         ),
         verbose=True,
         llm=llm,
     )
 
-    # --- Tasks (sequential: Bull -> Bear -> Moderator) ---
+    # --- Market data for all agents ---
+    verification_section = ""
+    if setup_verification:
+        verification_section = f"\n\nSETUP HISTORY (from graph - how each signal developed before this moment):\n{setup_verification}"
+
     market_data = (
         f"SIGNALS:\n{signals_text}\n\n"
         f"SECTOR FLOWS:\n{sector_context}\n\n"
         f"HISTORY:\n{memory_text}"
+        f"{verification_section}"
+    )
+
+    # --- Tasks (sequential: Verifier -> Bull -> Bear -> Moderator) ---
+    verifier_task = Task(
+        description=(
+            f"Read the setup history for each signal and give a ONE-LINE verdict.\n\n"
+            f"{market_data}\n\n"
+            f"For each signal, check the SETUP HISTORY and say:\n"
+            f"VERIFIED [symbol]: setup developed consistently, evidence built up\n"
+            f"WARNING [symbol]: [specific concern from history, e.g. 'volume dying 4 of 6 bars']\n"
+            f"REJECTED [symbol]: [critical issue, e.g. 'market breadth against + volume collapsed']\n"
+            f"Be brief — one line per signal."
+        ),
+        expected_output="One-line verdict per signal: VERIFIED, WARNING, or REJECTED with reason",
+        agent=verifier,
     )
 
     bull_task = Task(
         description=(
-            f"Analyze these trading signals and build the BULL case for each.\n\n"
+            f"The Verifier has checked each setup's history. Now build the BULL case.\n\n"
             f"{market_data}\n\n"
             f"For each signal, argue:\n"
             f"- Key GREEN flags and strengths\n"
             f"- Sector/volume/momentum support\n"
             f"- Historical edge if any\n"
             f"- Your conviction: HIGH/MEDIUM/LOW\n"
-            f"Focus on the top 3-5 best signals."
+            f"Focus on the top 3-5 best signals. Consider the Verifier's verdicts."
         ),
         expected_output="Bull case for each signal with specific data points and conviction levels",
         agent=bull,
@@ -143,12 +197,12 @@ def debate_scanner(
 
     bear_task = Task(
         description=(
-            f"Now tear apart these signals. Build the BEAR case against each.\n\n"
+            f"The Verifier and Bull have spoken. Now tear apart these signals.\n\n"
             f"{market_data}\n\n"
             f"For each signal the Bull liked, find:\n"
             f"- RED flags and specific risks\n"
             f"- Counter-evidence (volume divergence, sector against, etc.)\n"
-            f"- Historical failures if any\n"
+            f"- If Verifier said WARNING or REJECTED, explain WHY that matters\n"
             f"- Your danger level: HIGH/MEDIUM/LOW\n"
             f"Be ruthless but fair - 'unknown sector' alone is weak. Focus on hard data."
         ),
@@ -158,21 +212,21 @@ def debate_scanner(
 
     moderator_task = Task(
         description=(
-            f"Read the Bull and Bear arguments above. Now decide which signals to take.\n\n"
-            f"Score each signal 1-10 based on the debate.\n"
+            f"Read ALL arguments: Verifier's setup check, Bull's case, Bear's objections.\n\n"
+            f"Score each signal 1-10 based on the full debate.\n"
             f"Output ONLY valid JSON (no markdown, no explanation outside JSON):\n"
             f"{{\"ranked\": [{{\"symbol\": \"X\", \"direction\": \"LONG\", \"strategy\": \"lnz3\", "
-            f"\"score\": 8, \"reason\": \"Bull: [key]. Bear: [key]. Decision: [why]\"}}]}}\n\n"
+            f"\"score\": 8, \"reason\": \"Verifier: [verdict]. Bull: [key]. Bear: [key]. Decision: [why]\"}}]}}\n\n"
             f"Only include score >= 6. Max 3 signals."
         ),
-        expected_output='Valid JSON with ranked signals, scores, and reasoning referencing both Bull and Bear',
+        expected_output='Valid JSON with ranked signals, scores, and reasoning referencing Verifier, Bull and Bear',
         agent=moderator,
     )
 
-    # --- Run Crew ---
+    # --- Run Crew (sequential: Verifier -> Bull -> Bear -> Moderator) ---
     crew = Crew(
-        agents=[bull, bear, moderator],
-        tasks=[bull_task, bear_task, moderator_task],
+        agents=[verifier, bull, bear, moderator],
+        tasks=[verifier_task, bull_task, bear_task, moderator_task],
         process=Process.sequential,
         verbose=True,
     )
@@ -221,13 +275,14 @@ def debate_monitor(
     memory: MarketMemory,
     api_key: str,
     technical_data: str = "",
+    reasoning: bool = False,
 ) -> tuple[Dict, DebateTrace]:
     """
     CrewAI debate for position monitoring.
     Returns (action_dict, trace).
     """
     os.environ["OPENAI_API_KEY"] = api_key
-    llm = _get_llm(api_key)
+    llm = _get_llm(api_key, reasoning=reasoning)
     trace = DebateTrace()
 
     # Build position context
