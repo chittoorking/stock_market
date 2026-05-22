@@ -368,17 +368,91 @@ def coded_moe_scan(
         m = score_momentum(sym, bars, bar_idx, direction)
         mkt = score_market(all_data, date, bar_idx, direction)
         mac = score_macro(date, direction)
+        strat = sig.strategy_name
 
-        # Weighted total (Volume + Momentum strongest, as discovered)
-        total = v * 1.2 + s * 1.0 + p * 1.0 + m * 1.3 + mkt * 0.8 + mac * 0.7
-        # Normalize to 0-60 range, threshold accordingly
+        # ═══ AGENT REASONING — not a formula, conditional logic ═══
+        # I'm the agent. I reason about what each strategy NEEDS.
+
+        # KILL conditions — instant reject regardless of other scores
+        killed = False
+        kill_reason = ""
+
+        # GDR4 lives or dies on volume. V < 5 = no follow-through.
+        if strat == 'gdr4' and v < 5:
+            killed = True; kill_reason = "GDR4 needs volume, V too low"
+
+        # AFT7 needs momentum to continue. M < 6 = exhausted.
+        if strat == 'aft7' and m < 6:
+            killed = True; kill_reason = "AFT7 needs momentum, M too low"
+
+        # LNZ3 is momentum-driven. If momentum is against, skip.
+        if strat == 'lnz3' and m < 7:
+            killed = True; kill_reason = "LNZ3 needs strong momentum"
+
+        # ANY strategy: if market is against (< 4), don't fight the tide
+        if mkt < 4:
+            killed = True; kill_reason = "Market against direction"
+
+        # ANY strategy: if both volume AND momentum are weak, dead signal
+        if v < 5 and m < 6:
+            killed = True; kill_reason = "Both volume and momentum weak"
+
+        if killed:
+            continue  # Skip this signal entirely
+
+        # BOOST conditions — add conviction
+        boost = 0
+        boost_reasons = []
+
+        # Momentum 9+ = very strong directional move, high conviction
+        if m >= 9:
+            boost += 3; boost_reasons.append("strong momentum")
+
+        # Volume 7+ with momentum 7+ = institutional participation + direction
+        if v >= 7 and m >= 7:
+            boost += 2; boost_reasons.append("vol+mom aligned")
+
+        # Sector strongly aligned = flow confirmation
+        if s >= 7:
+            boost += 1; boost_reasons.append("sector confirms")
+
+        # Macro aligned = global tailwind
+        if mac >= 7:
+            boost += 1; boost_reasons.append("macro tailwind")
+
+        # Clean price structure (low noise, good candles)
+        if p >= 7:
+            boost += 1; boost_reasons.append("clean price")
+
+        # PENALTY conditions
+        penalty = 0
+
+        # High VIX day + any strategy = wider stops needed, less conviction
+        if mac < 4:
+            penalty += 2
+
+        # Sector against = headwind
+        if s < 4:
+            penalty += 1
+
+        # Choppy price action
+        if p < 4:
+            penalty += 1
+
+        # Final score: base from weighted sum + boost - penalty
+        base = v * 1.5 + s * 0.5 + p * 0.8 + m * 1.3 + mkt * 0.5 + mac * 0.5
+        total = base + boost * 2 - penalty * 2
+
+        reason_parts = [f"V:{v:.0f} S:{s:.0f} P:{p:.0f} M:{m:.0f} Mkt:{mkt:.0f} Mac:{mac:.0f}"]
+        if boost_reasons: reason_parts.append(f"+{','.join(boost_reasons)}")
+        if penalty: reason_parts.append(f"-pen:{penalty}")
 
         scored.append(SignalScore(
-            symbol=sym, direction=direction, strategy=sig.strategy_name,
+            symbol=sym, direction=direction, strategy=strat,
             volume=round(v, 1), sector=round(s, 1), price=round(p, 1),
             momentum=round(m, 1), market=round(mkt, 1), macro=round(mac, 1),
             total=round(total, 1),
-            reason=f"V:{v:.0f} S:{s:.0f} P:{p:.0f} M:{m:.0f} Mkt:{mkt:.0f} Mac:{mac:.0f}",
+            reason=" ".join(reason_parts),
         ))
 
     # Sort by total score, pick top N
