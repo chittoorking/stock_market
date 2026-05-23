@@ -27,14 +27,114 @@ for f in sorted(data_dir.glob('*.csv')):
 
 all_dates = sorted(set(b['timestamp'][:10] for bars in all_data.values() for b in bars))
 
-# Pre-compute prev close
+# Pre-compute prev close + daily trend data
 prev_close = {}
+daily_trend = {}  # (date, sym) -> {trend, streak, daily_rsi, ema_position, higher_lows}
+
 for sym, bars in all_data.items():
     dates_for_sym = sorted(set(b['timestamp'][:10] for b in bars))
+    daily_closes = []
+    daily_highs = []
+    daily_lows = []
+
     for i, d in enumerate(dates_for_sym):
+        db = date_bars[d].get(sym, [])
+        if not db: continue
+
         if i > 0:
             pdb = date_bars[dates_for_sym[i-1]].get(sym, [])
             if pdb: prev_close[(d, sym)] = pdb[-1]['close']
+
+        day_close = db[-1]['close']
+        day_high = max(b['high'] for b in db)
+        day_low = min(b['low'] for b in db)
+        daily_closes.append(day_close)
+        daily_highs.append(day_high)
+        daily_lows.append(day_low)
+
+        if len(daily_closes) >= 5:
+            # 5-day trend: are closes rising or falling?
+            c5 = daily_closes[-5:]
+            up_days = sum(1 for j in range(1, len(c5)) if c5[j] > c5[j-1])
+            trend_5d = 'UP' if up_days >= 4 else 'DOWN' if up_days <= 1 else 'SIDEWAYS'
+
+            # 10-day trend
+            if len(daily_closes) >= 10:
+                c10 = daily_closes[-10:]
+                trend_10d = 'UP' if c10[-1] > c10[0] * 1.02 else 'DOWN' if c10[-1] < c10[0] * 0.98 else 'SIDEWAYS'
+            else:
+                trend_10d = trend_5d
+
+            # Higher lows (bullish) or lower highs (bearish) last 5 days
+            h5 = daily_highs[-5:]
+            l5 = daily_lows[-5:]
+            higher_lows = sum(1 for j in range(1, len(l5)) if l5[j] > l5[j-1])
+            lower_highs = sum(1 for j in range(1, len(h5)) if h5[j] < h5[j-1])
+
+            # Daily RSI (14-period)
+            if len(daily_closes) >= 15:
+                gains = [max(0, daily_closes[j]-daily_closes[j-1]) for j in range(-14, 0)]
+                loss_l = [max(0, daily_closes[j-1]-daily_closes[j]) for j in range(-14, 0)]
+                ag = sum(gains)/14; al = sum(loss_l)/14
+                rsi = 100 - 100/(1+ag/al) if al > 0 else 50
+            else:
+                rsi = 50
+
+            # Price vs 20-day SMA
+            sma20 = sum(daily_closes[-min(20,len(daily_closes)):]) / min(20, len(daily_closes))
+            above_sma = day_close > sma20
+
+            # Streak: consecutive up/down days
+            streak = 0
+            for j in range(len(daily_closes)-1, 0, -1):
+                if daily_closes[j] > daily_closes[j-1]: streak += 1
+                else: break
+            down_streak = 0
+            for j in range(len(daily_closes)-1, 0, -1):
+                if daily_closes[j] < daily_closes[j-1]: down_streak += 1
+                else: break
+
+            # 52-week (250 days) high/low context
+            lookback = min(250, len(daily_closes))
+            high_52w = max(daily_closes[-lookback:])
+            low_52w = min(daily_closes[-lookback:])
+            pct_from_high = (day_close - high_52w) / high_52w * 100
+            pct_from_low = (day_close - low_52w) / low_52w * 100
+            near_52w_high = pct_from_high > -3  # Within 3% of 52w high
+            near_52w_low = pct_from_low < 3     # Within 3% of 52w low
+
+            # Volume context: today vs 20-day avg daily volume
+            daily_vols = []
+            for j2 in range(max(0, len(daily_closes)-21), len(daily_closes)-1):
+                d2 = dates_for_sym[j2]
+                db2 = date_bars[d2].get(sym, [])
+                if db2: daily_vols.append(sum(b2['volume'] for b2 in db2))
+            avg_daily_vol = sum(daily_vols)/len(daily_vols) if daily_vols else 0
+            today_vol = sum(b3['volume'] for b3 in db)
+            vol_vs_avg = today_vol / avg_daily_vol if avg_daily_vol > 0 else 1
+
+            # Volatility: 5-day avg daily range as % of price
+            ranges_5d = [(daily_highs[j3]-daily_lows[j3])/daily_closes[j3]*100 for j3 in range(-min(5,len(daily_closes)),0)]
+            avg_range_5d = sum(ranges_5d)/len(ranges_5d) if ranges_5d else 0
+
+            daily_trend[(d, sym)] = {
+                'trend_5d': trend_5d,
+                'trend_10d': trend_10d,
+                'higher_lows': higher_lows,
+                'lower_highs': lower_highs,
+                'rsi': round(rsi, 0),
+                'above_sma': above_sma,
+                'up_streak': streak,
+                'dn_streak': down_streak,
+                'daily_change_5d': round((daily_closes[-1]/daily_closes[-5]-1)*100, 2) if len(daily_closes)>=5 else 0,
+                'pct_from_52w_high': round(pct_from_high, 1),
+                'pct_from_52w_low': round(pct_from_low, 1),
+                'near_52w_high': near_52w_high,
+                'near_52w_low': near_52w_low,
+                'vol_vs_20d_avg': round(vol_vs_avg, 1),
+                'avg_daily_range': round(avg_range_5d, 2),
+            }
+
 print('Done.\n', flush=True)
 
 import argparse
@@ -130,55 +230,86 @@ def build_market_snapshot(date, scan_bar=6):
     quiet_vol = [s for s in stocks if abs(s['move']) <= 0.3 and s['vol'] > sum(ss['vol'] for ss in stocks)/len(stocks)*1.5]
 
     lines = [header]
+    def fmt_stock(s):
+        dt = daily_trend.get((date, s['sym']), {})
+        trend = dt.get('trend_5d', '?')
+        t10 = dt.get('trend_10d', '?')
+        rsi_d = dt.get('rsi', 50)
+        chg5 = dt.get('daily_change_5d', 0)
+        hl = dt.get('higher_lows', 0)
+        lh = dt.get('lower_highs', 0)
+        sma = 'abvSMA' if dt.get('above_sma') else 'blwSMA'
+        h52 = dt.get('pct_from_52w_high', 0)
+        l52 = dt.get('pct_from_52w_low', 0)
+        vol_d = dt.get('vol_vs_20d_avg', 1)
+        adr = dt.get('avg_daily_range', 0)
+        bm_str = ' '.join(f'{m:+.2f}' for m in s['bar_moves'][-4:])
+        w52 = 'nr52H' if dt.get('near_52w_high') else ('nr52L' if dt.get('near_52w_low') else '')
+        return (
+            f"  {s['sym']:>12} | today:{s['move']:+5.2f}% gap:{s['gap']:+5.2f}% {s['accel']} {s['streak']} | "
+            f"DAILY:{trend}/{t10} RSI={rsi_d:.0f} {sma} 5d={chg5:+.1f}% HL={hl} LH={lh} | "
+            f"52w: {h52:+.0f}%fromH {l52:+.0f}%fromL {w52} | vol:{vol_d:.1f}x ADR:{adr:.1f}% | [{bm_str}]"
+        )
+
     lines.append("BIG MOVERS (>1%):")
     for s in big[:15]:
-        bm_str = ' '.join(f'{m:+.2f}' for m in s['bar_moves'][-4:])
-        lines.append(
-            f"  {s['sym']:>12} | {s['move']:+5.2f}% | gap:{s['gap']:+5.2f}% | bar0:{s['bar0']} body={s['body']:.0f}% | "
-            f"{s['accel']} | streak:{s['streak']} | bars:[{bm_str}]"
-        )
+        lines.append(fmt_stock(s))
 
     lines.append("\nBUILDING MOMENTUM (0.3-1%, accelerating):")
     for s in building[:10]:
-        bm_str = ' '.join(f'{m:+.2f}' for m in s['bar_moves'][-4:])
-        lines.append(
-            f"  {s['sym']:>12} | {s['move']:+5.2f}% | gap:{s['gap']:+5.2f}% | bar0:{s['bar0']} body={s['body']:.0f}% | "
-            f"{s['accel']} | streak:{s['streak']} | bars:[{bm_str}]"
-        )
+        lines.append(fmt_stock(s))
 
     lines.append("\nQUIET + HIGH VOLUME (coiling?):")
     for s in quiet_vol[:5]:
-        lines.append(f"  {s['sym']:>12} | {s['move']:+5.2f}% | vol:{s['vol']:,}")
+        dt = daily_trend.get((date, s['sym']), {})
+        lines.append(f"  {s['sym']:>12} | {s['move']:+5.2f}% | vol:{s['vol']:,} | DAILY: {dt.get('trend_5d','?')} RSI={dt.get('rsi',50):.0f}")
 
     return "\n".join(lines), stocks
 
 
 def llm_pick(snapshot, api_key):
     """LLM picks exactly 1 stock and direction."""
-    system = """You are an expert NSE intraday trader. You see all 45 stocks at 9:45 AM.
+    system = """You are an expert NSE intraday trader. You see all 45 stocks with DAILY trend data + today's opening action.
 
-Your job: pick THE ONE stock that will make the biggest PREDICTABLE move today.
+STEP 1 — READ THE DAILY TREND FIRST:
+Each stock shows its 5-day and 10-day trend (UP/DOWN/SIDEWAYS), daily RSI,
+position vs 20-day SMA, and higher-lows/lower-highs count.
+A stock trending UP on daily with higher lows = strong. Trade WITH that trend intraday.
+A stock SIDEWAYS on daily = range-bound = DON'T TRADE IT (this is what kills trades).
 
-CRITICAL LESSONS FROM 4 YEARS OF DATA:
-1. DO NOT just pick the biggest morning mover. Big movers (+3%+) often CONTINUE, not reverse.
-   If a stock gapped +3% with 80%+ body, it has REAL momentum — don't short it.
-2. Look for ACCELERATION in the bar-by-bar data. Bars getting bigger = momentum building.
-   A stock moving only +0.8% but ACCELERATING is better than +3% but DECELERATING.
-3. Strong body (>80%) on bar0 + continued direction = MOMENTUM trade (go WITH it).
-   Weak body (<40%) on bar0 + big move = FAKE move, likely reverses.
-4. Check the "BUILDING MOMENTUM" section — these quiet stocks often explode.
-5. Sometimes the best trade is a stock that barely moved but has high volume (coiling).
+STEP 2 — CHECK TODAY'S INTRADAY ACTION:
+Is today's move WITH or AGAINST the daily trend?
+- Stock trending UP daily + opening green today = HIGH PROBABILITY LONG
+- Stock trending DOWN daily + opening red today = HIGH PROBABILITY SHORT
+- Stock trending UP daily but opening red today = WAIT or SKIP (counter-trend)
+- Stock SIDEWAYS daily + any move = SKIP (dead pick, stock won't follow through)
 
-WHAT KILLS TRADES:
-- Fading a strong trend (bar0 body 80%+ and all bars same color = don't fade)
-- Picking an illiquid stock
-- Trading against the market regime
+STEP 3 — CONFIRM WITH BAR MOMENTUM:
+Look at bar-by-bar data. Is momentum ACCELERATING or DECELERATING?
+ACCEL = bars getting bigger = conviction building = ENTER
+DECEL = bars getting smaller = fading = SKIP
 
-Pick exactly 1 stock. You can also say SKIP if nothing looks convincing.
+WHAT MAKES DEAD PICKS (avoid these):
+- Daily trend = SIDEWAYS AND today's move < 0.5% = truly dead stock
+- Stock near 52-week middle with no momentum = range-bound
+- Today's move AGAINST strong daily trend with strong body = dangerous fade
+
+WHAT MAKES WINNERS:
+- Daily trend = UP/DOWN (clear direction) + intraday move WITH it
+- Stock near 52-week high/low = trending strongly
+- Momentum ACCELERATING on today's bars
+- High volume vs 20-day avg = institutional interest
+
+IMPORTANT: CHOPPY market days CAN still have winners.
+On choppy days, look for the ONE stock that has clear daily trend + intraday confirmation.
+DO NOT skip just because the market is choppy — the best stock still moves +2-3%.
+Only SKIP if truly NO stock has daily trend + intraday confirmation together.
+
+Pick exactly 1 stock. Only SKIP if nothing has both daily trend AND intraday confirmation.
 
 Output JSON only:
-{"symbol":"STOCKNAME","direction":"LONG or SHORT","reasoning":"2 sentences why"}
-Or: {"symbol":"SKIP","direction":"SKIP","reasoning":"why no good setup"}"""
+{"symbol":"STOCKNAME","direction":"LONG or SHORT","reasoning":"2 sentences citing daily trend + intraday confirmation"}
+Or: {"symbol":"SKIP","direction":"SKIP","reasoning":"why no clear setup"}"""
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
@@ -235,7 +366,7 @@ for date in test_dates:
     if not db or len(db) <= 40:
         print(f"  No data for {sym}. SKIP.\n"); continue
 
-    scan_bar = 6
+    scan_bar = 10  # 10:15 AM — wait for first 50min of noise to settle
     entry = db[scan_bar]['close']
     atr = sum(db[k]['high']-db[k]['low'] for k in range(max(0,scan_bar-5),scan_bar+1))/min(6,scan_bar+1)
 

@@ -79,3 +79,18 @@
 - If rules applied (skip conflicts, bounce, low vol, no premature BE):
   Skip: Trade 2 (bar0 conflict), Trade 5 (bounce), Trade 7 (low vol), Trade 10 (bar0 conflict), Trade 12 (low vol), Trade 17 (low vol)
   Keep: 14 trades, ~57% WR, much less charges wasted
+
+## Trades 21-28 Analysis:
+- BRITANNIA BE: 4 green bars after entry. R3 level failed immediately.
+- AXISBANK May 19 LOSS: morning flat, bar0 body 8% = no conviction
+- HINDUNILVR WIN +1.10%: first 4 bars mostly RED = confirmed SHORT
+
+10. EARLY EXIT RULE: If 3 of first 4 bars after entry are AGAINST with body > 40%, EXIT. Level failed.
+11. MORNING MOMENTUM RULE: For CAM_R3 SHORT, morning should be negative. If > +0.5%, skip.
+
+## 100-DAY RESULTS WITH RULES 1-9:
+OLD: 49% WR, +0.27% net, Rs 1,00,038
+NEW: 62% WR, +4.98% net, Rs 1,04,886
+Improvement: +Rs 4,847
+
+Still analyzing more trades to find more patterns.
