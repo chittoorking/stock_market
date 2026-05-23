@@ -143,19 +143,10 @@ for date in test_dates:
                         signals.append({'sym':sym,'type':'CAM_R3','dir':'SHORT','bar':j,
                             'entry':db[j]['close'],'stop':r4,'risk_pct':round((r4-db[j]['close'])/db[j]['close']*100,2)})
                         break
-                    if abs(db[j]['low']-s3)<tol and db[j]['close']>s3:
-                        signals.append({'sym':sym,'type':'CAM_S3','dir':'LONG','bar':j,
-                            'entry':db[j]['close'],'stop':s4,'risk_pct':round((db[j]['close']-s4)/db[j]['close']*100,2)})
-                        break
+                    # CAM_S3 removed — 50% WR, dragging performance
+                    pass
 
-        # ── SIGNAL 3: Daily trend continuation ──
-        if ctx.get('trend') in ('UP','DOWN') and abs(move) > 0.3:
-            if ctx['trend']=='UP' and move > 0 and consec_green >= 3:
-                signals.append({'sym':sym,'type':'TREND_CONT','dir':'LONG','bar':scan_bar,
-                    'entry':entry_price,'stop':entry_price-atr*2.5,'risk_pct':round(atr*2.5/entry_price*100,2)})
-            elif ctx['trend']=='DOWN' and move < 0 and consec_green <= 1:
-                signals.append({'sym':sym,'type':'TREND_CONT','dir':'SHORT','bar':scan_bar,
-                    'entry':entry_price,'stop':entry_price+atr*2.5,'risk_pct':round(atr*2.5/entry_price*100,2)})
+        # TREND_CONT removed — 0% WR on 20-day test
 
     # Deduplicate by sym (keep first)
     seen = set(); unique_sigs = []
