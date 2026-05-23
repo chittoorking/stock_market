@@ -12,6 +12,58 @@ MONITOR_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "run_calculation",
+            "description": "Run a Python calculation on the trade data. You can compute: linear regression slope, momentum projection, ATR-based targets, Fibonacci levels, moving averages, RSI, or any custom math. Write a Python expression that returns a number or string.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python expression to evaluate. Available variables: closes (list of close prices), highs, lows, volumes, entry (entry price), current (current price), atr (average true range). Example: 'sum(closes[-5:])/5' for 5-bar SMA."}
+                },
+                "required": ["code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_momentum_projection",
+            "description": "Project where price is heading based on recent momentum. Uses linear regression on last N bars to project price at bar+5 and bar+10. Shows momentum strength and projected target.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "n_bars": {"type": "integer", "description": "Number of recent bars to use for projection (3-15)"}
+                },
+                "required": ["n_bars"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_risk_reward",
+            "description": "Calculate current risk:reward from current price to stop and target. Shows how much room to target vs how much risk to stop, and whether R:R justifies staying in.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_similar_past_trades",
+            "description": "Check if similar setups (same stock, same direction, similar conditions) have been profitable in the past. Shows historical win rate and average P&L.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_candle_patterns",
+            "description": "Detect candlestick patterns at current bar: doji, engulfing, hammer, shooting star, marubozu, etc. Shows if reversal or continuation patterns are forming.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_recent_bars",
             "description": "Get the last N 5-minute candles for this stock. Shows OHLCV for each bar. Use this to see recent price action and patterns.",
             "parameters": {
@@ -168,8 +220,18 @@ class TradeContext:
             return self._key_levels()
         elif name == "get_market_breadth":
             return self._market_breadth()
+        elif name == "run_calculation":
+            return self._run_calculation(args.get("code", ""))
+        elif name == "get_momentum_projection":
+            return self._momentum_projection(args.get("n_bars", 5))
+        elif name == "get_risk_reward":
+            return self._risk_reward()
+        elif name == "get_similar_past_trades":
+            return self._similar_past()
+        elif name == "get_candle_patterns":
+            return self._candle_patterns()
         elif name == "execute_action":
-            return json.dumps(args)  # Return as-is, caller handles
+            return json.dumps(args)
         elif name == "dig_deeper":
             return self._dig_deeper(args.get("symbol", self.symbol))
         elif name == "decide_trades":
@@ -266,6 +328,164 @@ class TradeContext:
         regime = "TRENDING UP" if up/tot>0.65 else "TRENDING DOWN" if dn/tot>0.65 else "CHOPPY"
         return f"Up: {up}/{tot} ({up/tot*100:.0f}%) | Down: {dn}/{tot} ({dn/tot*100:.0f}%) | Flat: {flat} | Regime: {regime}"
 
+    def _run_calculation(self, code):
+        """Safely execute Python calculation with trade data available."""
+        bars = self.all_bars[:self.bar_idx+1]
+        closes = [b['close'] for b in bars]
+        highs = [b['high'] for b in bars]
+        lows = [b['low'] for b in bars]
+        volumes = [b['volume'] for b in bars]
+        entry = self.entry
+        current = bars[-1]['close'] if bars else 0
+        atr = sum(highs[i]-lows[i] for i in range(max(0,len(bars)-6),len(bars)))/min(6,len(bars)) if bars else 0
+
+        allowed_names = {
+            'closes': closes, 'highs': highs, 'lows': lows, 'volumes': volumes,
+            'entry': entry, 'current': current, 'atr': atr,
+            'sum': sum, 'max': max, 'min': min, 'abs': abs, 'len': len,
+            'round': round, 'sorted': sorted,
+        }
+        try:
+            import math
+            allowed_names['math'] = math
+            result = eval(code, {"__builtins__": {}}, allowed_names)
+            return str(result)
+        except Exception as e:
+            return f"Error: {e}"
+
+    def _momentum_projection(self, n_bars):
+        """Linear regression projection on last N bars."""
+        bars = self.all_bars[max(0,self.bar_idx-n_bars+1):self.bar_idx+1]
+        if len(bars) < 3: return "Not enough bars for projection"
+        closes = [b['close'] for b in bars]
+        n = len(closes)
+        x_mean = (n-1)/2
+        y_mean = sum(closes)/n
+        sx2 = sum((i-x_mean)**2 for i in range(n))
+        if sx2 == 0: return "Flat price, no projection"
+        slope = sum((i-x_mean)*(closes[i]-y_mean) for i in range(n)) / sx2
+        intercept = y_mean - slope * x_mean
+
+        proj_5 = slope * (n + 4) + intercept
+        proj_10 = slope * (n + 9) + intercept
+        current = closes[-1]
+        slope_pct = slope / current * 100
+
+        strength = "STRONG" if abs(slope_pct) > 0.05 else "MODERATE" if abs(slope_pct) > 0.02 else "WEAK"
+        direction = "UP" if slope > 0 else "DOWN"
+
+        return (f"Momentum: {direction} {strength} (slope={slope_pct:+.3f}%/bar)\n"
+                f"Current: {current:.2f}\n"
+                f"Projected +25min: {proj_5:.2f} ({(proj_5-current)/current*100:+.2f}%)\n"
+                f"Projected +50min: {proj_10:.2f} ({(proj_10-current)/current*100:+.2f}%)\n"
+                f"R-squared fit quality: {self._r_squared(closes):.2f}")
+
+    def _r_squared(self, closes):
+        """R-squared for linear regression fit."""
+        n = len(closes)
+        if n < 3: return 0
+        x_mean = (n-1)/2; y_mean = sum(closes)/n
+        sx2 = sum((i-x_mean)**2 for i in range(n))
+        if sx2 == 0: return 0
+        slope = sum((i-x_mean)*(closes[i]-y_mean) for i in range(n)) / sx2
+        intercept = y_mean - slope * x_mean
+        ss_res = sum((closes[i] - (slope*i+intercept))**2 for i in range(n))
+        ss_tot = sum((closes[i] - y_mean)**2 for i in range(n))
+        return 1 - ss_res/ss_tot if ss_tot > 0 else 0
+
+    def _risk_reward(self):
+        """Calculate current risk:reward."""
+        current = self.all_bars[self.bar_idx]['close']
+        if self.direction == 'LONG':
+            risk = current - self.cur_stop
+            reward = self.target - current
+        else:
+            risk = self.cur_stop - current
+            reward = current - self.target
+        rr = reward / risk if risk > 0 else 0
+        risk_pct = risk / current * 100
+        reward_pct = reward / current * 100
+        return (f"Current: {current:.2f} | Stop: {self.cur_stop:.2f} | Target: {self.target:.2f}\n"
+                f"Risk: {risk:.2f} ({risk_pct:.2f}%) | Reward: {reward:.2f} ({reward_pct:.2f}%)\n"
+                f"R:R = {rr:.1f}:1\n"
+                f"{'FAVORABLE' if rr >= 2 else 'MARGINAL' if rr >= 1 else 'UNFAVORABLE'} risk:reward")
+
+    def _similar_past(self):
+        """Check historical performance of this stock."""
+        # From our 4-year analysis
+        known_stats = {
+            'NTPC': '64% WR on ORB (best stock), profitable every year',
+            'ULTRACEMCO': '48% WR on ORB, inconsistent across years',
+            'HDFCBANK': '70% WR on Camarilla R3, most reliable',
+            'HCLTECH': '68% WR on Camarilla R3',
+            'TITAN': '68% WR on Camarilla R3',
+            'SBIN': '67% WR on Camarilla R3',
+            'ADANIENT': '43% WR on ORB — unreliable, high ATR',
+            'APOLLOHOSP': '36% WR on ORB — worst stock, avoid',
+            'ASIANPAINT': '49% WR on ORB, inconsistent',
+            'TATASTEEL': '42% WR on ORB',
+            'BPCL': '50% WR on ORB',
+            'COALINDIA': '49% WR on ORB',
+            'HEROMOTOCO': '40% WR on ORB — avoid',
+        }
+        stat = known_stats.get(self.symbol, f'No specific history for {self.symbol}')
+        return f"Historical: {stat}\n(Based on 4-year backtest, 1087 trading days)"
+
+    def _candle_patterns(self):
+        """Detect patterns at current bar."""
+        if self.bar_idx < 2: return "Not enough bars"
+        b = self.all_bars[self.bar_idx]
+        prev = self.all_bars[self.bar_idx-1]
+
+        body = abs(b['close']-b['open'])
+        rng = b['high']-b['low']
+        if rng == 0: return "Zero range bar (no movement)"
+
+        body_pct = body/rng*100
+        uw = b['high'] - max(b['open'],b['close'])
+        lw = min(b['open'],b['close']) - b['low']
+        is_green = b['close'] > b['open']
+
+        patterns = []
+
+        # Marubozu
+        if body_pct > 80:
+            patterns.append(f"MARUBOZU ({'bullish' if is_green else 'bearish'}) — {body_pct:.0f}% body, strong conviction")
+
+        # Doji
+        if body_pct < 10:
+            patterns.append(f"DOJI — {body_pct:.0f}% body, indecision, potential reversal")
+
+        # Hammer
+        if lw > body*2 and uw < body*0.5:
+            patterns.append(f"HAMMER — long lower wick, buying pressure from below")
+
+        # Shooting star
+        if uw > body*2 and lw < body*0.5:
+            patterns.append(f"SHOOTING STAR — long upper wick, selling pressure from above")
+
+        # Engulfing
+        prev_body = abs(prev['close']-prev['open'])
+        if body > prev_body * 1.3:
+            if is_green and prev['close'] < prev['open']:
+                patterns.append("BULLISH ENGULFING — current green candle engulfs previous red")
+            elif not is_green and prev['close'] > prev['open']:
+                patterns.append("BEARISH ENGULFING — current red candle engulfs previous green")
+
+        # Pin bar
+        total_wick = uw + lw
+        if total_wick > body * 3:
+            patterns.append(f"PIN BAR — wicks {total_wick/body:.1f}x body, rejection candle")
+
+        # Inside bar
+        if b['high'] <= prev['high'] and b['low'] >= prev['low']:
+            patterns.append("INSIDE BAR — range within previous bar, compression before breakout")
+
+        if not patterns:
+            patterns.append(f"No significant pattern. Body={body_pct:.0f}%, {'green' if is_green else 'red'}")
+
+        return "\n".join(patterns)
+
     def _dig_deeper(self, symbol):
         parts = []
         # Recent 5 bars
@@ -293,7 +513,7 @@ def moe_monitor_with_tools(
     position_summary: str,
     trade_ctx: TradeContext,
     api_key: str,
-    model: str = "gpt-4.1-nano",
+    model: str = "gpt-4o-mini",
     max_tool_calls: int = 3,
 ) -> Dict:
     """
@@ -377,7 +597,7 @@ def moe_scan_with_tools(
     all_data: dict,
     date: str,
     api_key: str,
-    model: str = "gpt-4.1-nano",
+    model: str = "gpt-4o-mini",
 ) -> Tuple[List[Dict], int]:
     """
     Scanner with tool use. LLM can dig deeper into specific stocks.

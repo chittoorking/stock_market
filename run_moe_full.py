@@ -11,7 +11,8 @@ sys.path.insert(0, '.')
 
 from pathlib import Path
 from collections import defaultdict
-from app.agents.moe_fast import moe_scan_fast, moe_monitor_fast
+from app.agents.moe_fast import moe_scan_fast
+from app.agents.moe_tools import moe_monitor_with_tools, TradeContext
 from app.signals.proven_strategies import GapAndGoSignal, LenzSignal, AftershockSignal, GapDecaySignal
 from app.core.signal_enrichment import enrich_all_signals, format_enriched_signals
 from app.agents.data_providers import SectorAnalyzer
@@ -27,6 +28,29 @@ for f in sorted(data_dir.glob('*.csv')):
                        'low': float(r['low']), 'close': float(r['close']), 'volume': int(float(r['volume']))} for r in rows]
 
 all_dates = sorted(set(r['timestamp'][:10] for rows in all_data.values() for r in rows))
+
+# Pre-compute prev day data using date index (fast)
+print("Pre-computing prev day data...", flush=True)
+date_bars_idx = defaultdict(dict)
+for sym, bars in all_data.items():
+    by_d = defaultdict(list)
+    for b in bars:
+        by_d[b['timestamp'][:10]].append(b)
+    for d, bs in by_d.items():
+        date_bars_idx[d][sym] = bs
+
+prev_day_data = {}
+for sym, bars in all_data.items():
+    dates_for_sym = sorted(set(b['timestamp'][:10] for b in bars))
+    for i, d in enumerate(dates_for_sym):
+        if i > 0:
+            pdb = date_bars_idx[dates_for_sym[i-1]].get(sym, [])
+            if pdb:
+                prev_day_data[(d, sym)] = {
+                    'high': max(b['high'] for b in pdb), 'low': min(b['low'] for b in pdb),
+                    'close': pdb[-1]['close'],
+                }
+print("Done.", flush=True)
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -153,7 +177,7 @@ for date in test_dates:
             body = abs(b['close']-b['open'])/(b['high']-b['low'])*100 if b['high']!=b['low'] else 0
             lots_str = ' '.join(f'{k}={v*100:.0f}%' for k,v in lots.items())
 
-            ctx = (
+            ctx_text = (
                 f"{direction} {sym_name} | Entry:{entry:.2f} Now:{b['close']:.2f}\n"
                 f"P&L:{pnl_now:+.3f}% | Peak:{max_fav:.3f}% | Fade:{fade:.0f}%\n"
                 f"Booked so far:{booked_pnl:+.3f}% | Open lots: {lots_str}\n"
@@ -161,8 +185,15 @@ for date in test_dates:
                 f"Bar {bars_held} {ts} | Vol:{vol_trend} | {candle} body {body:.0f}%"
             )
 
-            mon = moe_monitor_fast(ctx, API_KEY)
-            total_api_calls += 1
+            prev_day = prev_day_data.get((date, sym_name)) if 'prev_day_data' in dir() else None
+            trade_ctx = TradeContext(
+                symbol=sym_name, direction=direction, entry=entry,
+                all_bars=sym_bars, bar_idx=j, all_data=all_data, date=date,
+                prev_day_data=prev_day, lots=lots, booked_pnl=booked_pnl,
+                cur_stop=cur_stop, target=target, max_fav=max_fav,
+            )
+            mon = moe_monitor_with_tools(ctx_text, trade_ctx, API_KEY)
+            total_api_calls += 1  # May be more due to tool calls
             action = mon.get('action', 'hold')
 
             if action == 'close_all':

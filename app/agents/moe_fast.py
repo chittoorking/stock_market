@@ -12,7 +12,7 @@ import requests
 def moe_scan_fast(
     context: str,
     api_key: str,
-    model: str = "gpt-4.1-nano",
+    model: str = "gpt-4o-mini",
 ) -> Tuple[List[Dict], Dict]:
     """
     Single API call MoE. LLM analyzes from all 15 expert perspectives
@@ -107,7 +107,7 @@ If no trade qualifies: {"trades": [], "skipped_reason": "why"}"""
 def moe_monitor_fast(
     position_context: str,
     api_key: str,
-    model: str = "gpt-4.1-nano",
+    model: str = "gpt-4o-mini",
 ) -> Dict:
     """
     Called EVERY bar with full live state. LLM manages the position like a prop trader.
