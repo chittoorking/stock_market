@@ -1,0 +1,297 @@
+{
+  "ranked_signals": [
+    {
+      "signal": "breadth_aligned",
+      "power": 4.2,
+      "w_mean": 0.329,
+      "l_mean": 0.287,
+      "delta": 0.042,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "breadth_against",
+      "power": 3.7,
+      "w_mean": 0.237,
+      "l_mean": 0.274,
+      "delta": -0.037,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "below_s3",
+      "power": 2.2,
+      "w_mean": 0.248,
+      "l_mean": 0.226,
+      "delta": 0.022,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "rs_pct",
+      "power": 1.6,
+      "w_mean": 51.754,
+      "l_mean": 50.184,
+      "delta": 1.57,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "rs_top10",
+      "power": 1.3,
+      "w_mean": 0.102,
+      "l_mean": 0.088,
+      "delta": 0.013,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "bar0_aligned",
+      "power": 1.1,
+      "w_mean": 0.683,
+      "l_mean": 0.672,
+      "delta": 0.011,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "candle",
+      "power": 1.1,
+      "w_mean": -0.047,
+      "l_mean": -0.004,
+      "delta": -0.043,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "breakout_bar",
+      "power": 1.0,
+      "w_mean": 3.69,
+      "l_mean": 3.561,
+      "delta": 0.129,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "above_r3",
+      "power": 0.9,
+      "w_mean": 0.292,
+      "l_mean": 0.301,
+      "delta": -0.009,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "bb_body_pct",
+      "power": 0.7,
+      "w_mean": 65.978,
+      "l_mean": 65.284,
+      "delta": 0.693,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "pd_body_pct",
+      "power": 0.6,
+      "w_mean": 44.724,
+      "l_mean": 45.34,
+      "delta": -0.616,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "bar0_body_pct",
+      "power": 0.5,
+      "w_mean": 47.027,
+      "l_mean": 46.406,
+      "delta": 0.621,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "consec",
+      "power": 0.3,
+      "w_mean": 1.835,
+      "l_mean": 1.803,
+      "delta": 0.032,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "breadth_up",
+      "power": 0.3,
+      "w_mean": 37.84,
+      "l_mean": 37.568,
+      "delta": 0.272,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "vwap_adj",
+      "power": 0.2,
+      "w_mean": 0.41,
+      "l_mean": 0.393,
+      "delta": 0.017,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "atr_pct",
+      "power": 0.2,
+      "w_mean": 0.573,
+      "l_mean": 0.559,
+      "delta": 0.014,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "orb_range_pct",
+      "power": 0.2,
+      "w_mean": 0.904,
+      "l_mean": 0.866,
+      "delta": 0.038,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "pd_aligned",
+      "power": 0.2,
+      "w_mean": 0.489,
+      "l_mean": 0.491,
+      "delta": -0.002,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "dow",
+      "power": 0.2,
+      "w_mean": 2.025,
+      "l_mean": 2.015,
+      "delta": 0.01,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "gap_size",
+      "power": 0.1,
+      "w_mean": 0.504,
+      "l_mean": 0.469,
+      "delta": 0.035,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "morning_adj",
+      "power": 0.1,
+      "w_mean": 0.72,
+      "l_mean": 0.687,
+      "delta": 0.032,
+      "direction": "HIGHER=WIN"
+    },
+    {
+      "signal": "pd_range_pct",
+      "power": 0.1,
+      "w_mean": 2.205,
+      "l_mean": 2.232,
+      "delta": -0.027,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "vol_ratio",
+      "power": 0.0,
+      "w_mean": 0.614,
+      "l_mean": 0.624,
+      "delta": -0.01,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "vol_spike",
+      "power": 0.0,
+      "w_mean": 0.853,
+      "l_mean": 0.857,
+      "delta": -0.004,
+      "direction": "LOWER=WIN"
+    },
+    {
+      "signal": "vol_sustain",
+      "power": 0.0,
+      "w_mean": 0.81,
+      "l_mean": 0.823,
+      "delta": -0.013,
+      "direction": "LOWER=WIN"
+    }
+  ],
+  "danger_zones": [],
+  "ideal_profile": {
+    "breadth_aligned": {
+      "winner_avg": 0.361,
+      "loser_avg": 0.342,
+      "threshold": 0.351,
+      "direction": "HIGHER=WIN"
+    },
+    "breadth_against": {
+      "winner_avg": 0.227,
+      "loser_avg": 0.263,
+      "threshold": 0.245,
+      "direction": "LOWER=WIN"
+    },
+    "below_s3": {
+      "winner_avg": 0.254,
+      "loser_avg": 0.304,
+      "threshold": 0.279,
+      "direction": "HIGHER=WIN"
+    },
+    "rs_pct": {
+      "winner_avg": 50.683,
+      "loser_avg": 49.134,
+      "threshold": 49.908,
+      "direction": "HIGHER=WIN"
+    },
+    "rs_top10": {
+      "winner_avg": 0.145,
+      "loser_avg": 0.169,
+      "threshold": 0.157,
+      "direction": "HIGHER=WIN"
+    },
+    "bar0_aligned": {
+      "winner_avg": 0.684,
+      "loser_avg": 0.739,
+      "threshold": 0.712,
+      "direction": "HIGHER=WIN"
+    },
+    "candle": {
+      "winner_avg": -0.033,
+      "loser_avg": -0.007,
+      "threshold": -0.02,
+      "direction": "LOWER=WIN"
+    },
+    "breakout_bar": {
+      "winner_avg": 3.195,
+      "loser_avg": 3.323,
+      "threshold": 3.259,
+      "direction": "HIGHER=WIN"
+    },
+    "above_r3": {
+      "winner_avg": 0.323,
+      "loser_avg": 0.342,
+      "threshold": 0.333,
+      "direction": "LOWER=WIN"
+    },
+    "bb_body_pct": {
+      "winner_avg": 66.409,
+      "loser_avg": 68.151,
+      "threshold": 67.28,
+      "direction": "HIGHER=WIN"
+    },
+    "pd_body_pct": {
+      "winner_avg": 44.753,
+      "loser_avg": 48.291,
+      "threshold": 46.522,
+      "direction": "LOWER=WIN"
+    },
+    "bar0_body_pct": {
+      "winner_avg": 47.129,
+      "loser_avg": 52.092,
+      "threshold": 49.61,
+      "direction": "HIGHER=WIN"
+    },
+    "consec": {
+      "winner_avg": 1.734,
+      "loser_avg": 1.793,
+      "threshold": 1.763,
+      "direction": "HIGHER=WIN"
+    },
+    "breadth_up": {
+      "winner_avg": 38.191,
+      "loser_avg": 38.473,
+      "threshold": 38.332,
+      "direction": "HIGHER=WIN"
+    },
+    "vwap_adj": {
+      "winner_avg": 0.481,
+      "loser_avg": 0.588,
+      "threshold": 0.534,
+      "direction": "HIGHER=WIN"
+    }
+  }
+}
