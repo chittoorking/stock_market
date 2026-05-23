@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 from app.agents.data_providers import SectorAnalyzer, VolumeProfiler, PriceStructure
 from app.signals.base import get_sector, SECTOR_MAP
+from app.agents.coded_moe import score_volume, score_sector, score_price, score_momentum, score_market, score_macro
 
 
 @dataclass
@@ -38,6 +39,15 @@ class SignalEnrichment:
     historical_edge: str = "unknown"     # "positive", "neutral", "negative"
     rvol: float = 0
     atr_pct: float = 0
+
+    # MoE Expert Scores (0-10 each, from coded_moe.py)
+    moe_volume: float = 0
+    moe_sector: float = 0
+    moe_price: float = 0
+    moe_momentum: float = 0
+    moe_market: float = 0
+    moe_macro: float = 0
+    moe_total: float = 0
 
     # Summary for LLM
     def summary(self) -> str:
