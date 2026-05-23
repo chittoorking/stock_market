@@ -708,7 +708,7 @@ def enrich_all_signals(
 
 
 def format_enriched_signals(signals: list, enrichments: Dict[str, SignalEnrichment]) -> str:
-    """Format signals as raw data — like a trading terminal screen. No opinions."""
+    """Build full context graph for LLM — raw state, maximum info, zero opinions."""
     lines = []
     for sig in signals:
         e = enrichments.get(sig.id)
@@ -716,48 +716,34 @@ def format_enriched_signals(signals: list, enrichments: Dict[str, SignalEnrichme
             lines.append(f"[{sig.strategy_name}] {sig.direction} {sig.symbol}")
             continue
 
-        # Pull raw numbers from what we computed
-        sym_bars = []  # We'll reconstruct key numbers from flags
-        # Parse key metrics from flags
-        metrics = {}
+        # Extract all numerical data from flags into a clean context block
+        data = {}
         for f in e.flags:
-            txt = f.split(":", 1)[1] if ":" in f and f.split(":")[0] in ("RED","GREEN","YELLOW") else f
-            # Extract numbers and key facts
-            if "RVOL" in txt or "rvol" in txt.lower():
-                metrics['rvol_note'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
-            elif "VWAP" in txt:
-                metrics['vwap'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
-            elif "Gap" in txt or "gap" in txt:
-                metrics['gap'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
-            elif "Morning" in txt or "morning" in txt:
-                metrics['morning'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
-            elif "Camarilla" in txt or "R3" in txt or "S3" in txt:
-                metrics['camarilla'] = txt.strip()[:80]
-            elif "Relative strength" in txt or "rank" in txt.lower():
-                metrics['rs'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
-            elif "breadth" in txt.lower() or "market" in txt.lower():
-                if 'breadth' not in metrics:
-                    metrics['breadth'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
-            elif "Sector" in txt or "sector" in txt:
-                if 'sector' not in metrics:
-                    metrics['sector'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
-            elif "EMA" in txt:
-                metrics['ema'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
-            elif "RSI" in txt:
-                metrics['rsi'] = txt.strip()[:40]
-            elif "body" in txt.lower() and 'bar0' not in metrics:
-                metrics['bar0'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
-            elif "noise" in txt.lower():
-                metrics['noise'] = txt.split('—')[0].strip() if '—' in txt else txt[:40]
-            elif "MONITOR" in txt:
-                pass  # Skip monitor rules in signal display
-            elif "Counter-trend" in txt or "counter" in txt.lower():
-                metrics['prevday'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
+            # Strip color prefix
+            txt = f.split(":", 1)[1].strip() if ":" in f and f.split(":")[0] in ("RED","GREEN","YELLOW") else f
+            # Store raw text — every piece of computed data
+            data[len(data)] = txt
 
-        # Build clean terminal-style output
-        header = f"[{sig.strategy_name}] {sig.direction} {sig.symbol} | RVOL={e.rvol:.1f}x ATR={e.atr_pct:.2f}%"
-        data_line = " | ".join(v for v in metrics.values() if v)
+        # Build context graph block
+        header = f"[{sig.strategy_name}] {sig.direction} {sig.symbol}"
+        state = f"  RVOL={e.rvol:.1f}x | ATR={e.atr_pct:.2f}% | vol_state={e.volume_health} | sector_state={e.sector_alignment} | price_state={e.price_quality} | history={e.historical_edge}"
 
-        lines.append(f"{header}\n  {data_line}" if data_line else header)
+        # All computed data points as context
+        context_lines = []
+        for txt in data.values():
+            # Remove opinion words but keep facts
+            for remove in [' — ', ' -- ']:
+                if remove in txt:
+                    # Keep the factual part (before the explanation)
+                    parts = txt.split(remove)
+                    txt = parts[0].strip()
+                    # If second part has numbers, keep those too
+                    if any(c.isdigit() for c in parts[-1][:20]):
+                        txt += f" ({parts[-1].strip()[:60]})"
+            context_lines.append(txt)
+
+        context = "  " + " | ".join(context_lines) if context_lines else ""
+
+        lines.append(f"{header}\n{state}\n{context}")
 
     return "\n".join(lines)
