@@ -708,29 +708,56 @@ def enrich_all_signals(
 
 
 def format_enriched_signals(signals: list, enrichments: Dict[str, SignalEnrichment]) -> str:
-    """Format signals with their enrichment flags for LLM consumption."""
+    """Format signals as raw data — like a trading terminal screen. No opinions."""
     lines = []
     for sig in signals:
         e = enrichments.get(sig.id)
         if not e:
-            lines.append(f"[{sig.strategy_name}] {sig.direction} {sig.symbol} conf={sig.raw_confidence:.0%}")
+            lines.append(f"[{sig.strategy_name}] {sig.direction} {sig.symbol}")
             continue
 
-        red_count = e.red_flag_count
-        green_count = e.green_flag_count
+        # Pull raw numbers from what we computed
+        sym_bars = []  # We'll reconstruct key numbers from flags
+        # Parse key metrics from flags
+        metrics = {}
+        for f in e.flags:
+            txt = f.split(":", 1)[1] if ":" in f and f.split(":")[0] in ("RED","GREEN","YELLOW") else f
+            # Extract numbers and key facts
+            if "RVOL" in txt or "rvol" in txt.lower():
+                metrics['rvol_note'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
+            elif "VWAP" in txt:
+                metrics['vwap'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
+            elif "Gap" in txt or "gap" in txt:
+                metrics['gap'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
+            elif "Morning" in txt or "morning" in txt:
+                metrics['morning'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
+            elif "Camarilla" in txt or "R3" in txt or "S3" in txt:
+                metrics['camarilla'] = txt.strip()[:80]
+            elif "Relative strength" in txt or "rank" in txt.lower():
+                metrics['rs'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
+            elif "breadth" in txt.lower() or "market" in txt.lower():
+                if 'breadth' not in metrics:
+                    metrics['breadth'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
+            elif "Sector" in txt or "sector" in txt:
+                if 'sector' not in metrics:
+                    metrics['sector'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
+            elif "EMA" in txt:
+                metrics['ema'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
+            elif "RSI" in txt:
+                metrics['rsi'] = txt.strip()[:40]
+            elif "body" in txt.lower() and 'bar0' not in metrics:
+                metrics['bar0'] = txt.split('—')[0].strip() if '—' in txt else txt[:50]
+            elif "noise" in txt.lower():
+                metrics['noise'] = txt.split('—')[0].strip() if '—' in txt else txt[:40]
+            elif "MONITOR" in txt:
+                pass  # Skip monitor rules in signal display
+            elif "Counter-trend" in txt or "counter" in txt.lower():
+                metrics['prevday'] = txt.split('—')[0].strip() if '—' in txt else txt[:60]
 
-        flag_str = ""
-        if red_count >= 2:
-            flag_str = " [BLOCKED: multiple red flags]"
-        elif red_count == 1:
-            flag_str = " [CAUTION: 1 red flag]"
-        elif green_count >= 2:
-            flag_str = " [STRONG: multiple green flags]"
+        # Build clean terminal-style output
+        header = f"[{sig.strategy_name}] {sig.direction} {sig.symbol} | RVOL={e.rvol:.1f}x ATR={e.atr_pct:.2f}%"
+        data_line = " | ".join(v for v in metrics.values() if v)
 
-        lines.append(
-            f"[{sig.strategy_name}] {sig.direction} {sig.symbol} ({e.sector_alignment}) "
-            f"conf={sig.raw_confidence:.0%}{flag_str}\n"
-            f"  {e.summary()}"
-        )
+        lines.append(f"{header}\n  {data_line}" if data_line else header)
 
     return "\n".join(lines)

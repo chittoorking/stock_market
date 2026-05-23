@@ -7,12 +7,18 @@ Usage:
     python run_crewai.py --start -3 --days 3    # Last 3 days
     python run_crewai.py --start 0 --days 5     # First 5 days
 """
-import sys; sys.path.insert(0, '.')
+import sys, io
+# Fix Windows encoding for CrewAI emoji output
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+sys.path.insert(0, '.')
 import csv, json, time
 from pathlib import Path
 from collections import defaultdict
 
-API_KEY = "REPLACE_WITH_YOUR_OPENAI_KEY"
+import os
+API_KEY = os.environ.get("OPENAI_API_KEY", "REPLACE_WITH_YOUR_OPENAI_KEY")
 
 data_dir = Path('data/5min')
 all_data = {}
@@ -212,6 +218,8 @@ for date in test_dates:
 
         prev_events = []
 
+        breakeven_activated = False
+
         for j in range(entry_bar+1, len(sb)):
             b = sb[j]; bh = j - entry_bar
             high_since = max(high_since, b['high']); low_since = min(low_since, b['low'])
@@ -224,6 +232,24 @@ for date in test_dates:
             mae = (entry_price-low_since)/entry_price*100 if direction=='LONG' else (high_since-entry_price)/entry_price*100
             fade = max(0, (max_fav-max(0,fav))/max_fav*100) if max_fav>0 else 0
             zone = "strong_win" if pnl>=0.75 else "decent_win" if pnl>=0.4 else "small_win" if pnl>=0.15 else "scratch" if pnl>=0 else "loss"
+
+            # ═══ BREAK-EVEN TRAILING STOP (from 4-year data mining) ═══
+            # 70% of losses went +0.2% favorable before reversing.
+            # Mechanical rule: move stop to break-even after +0.2% gain.
+            if not breakeven_activated and mfe >= 0.2:
+                breakeven_activated = True
+                new_be_stop = entry_price  # Break-even
+                if direction == 'LONG':
+                    cur_stop = max(cur_stop, new_be_stop)
+                else:
+                    cur_stop = min(cur_stop, new_be_stop)
+            # If MFE >= 0.5%, tighten further to +0.2%
+            if breakeven_activated and mfe >= 0.5:
+                lock_in = entry_price * (1 + 0.002) if direction == 'LONG' else entry_price * (1 - 0.002)
+                if direction == 'LONG':
+                    cur_stop = max(cur_stop, lock_in)
+                else:
+                    cur_stop = min(cur_stop, lock_in)
 
             sec_data = SectorAnalyzer.compute(all_data, date, j)
             sec_info = sec_data.get(node.sector, {})

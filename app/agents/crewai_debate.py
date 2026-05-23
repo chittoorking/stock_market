@@ -43,7 +43,7 @@ class DebateTrace:
 def _get_llm(api_key: str) -> LLM:
     """Create a CrewAI-compatible LLM."""
     return LLM(
-        model="openai/gpt-4o-mini",
+        model="openai/gpt-4.1-nano",
         api_key=api_key,
         temperature=0,
         max_tokens=800,
