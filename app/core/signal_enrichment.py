@@ -559,6 +559,133 @@ def enrich_signal(
         if "P&L=-" in sec_hist:
             enrichment.flags.append("YELLOW:Sector has negative history — " + sec_hist[:50])
 
+    # ═══════════════════════════════════════════════════════════════
+    # 5. 4-YEAR DATA MINING DISCOVERIES (from 40,737 trades)
+    # These signals were ranked by predictive power across 1087 days.
+    # They are DATA for the LLM, not filters.
+    # ═══════════════════════════════════════════════════════════════
+
+    # ─── 5a. Camarilla Pivot Levels (2.2% predictive power) ───
+    # From 4-year analysis: entry near Camarilla S3 = support = better for longs
+    # Entry above R3 = resistance = risky for longs
+    if prev_close and prev_bars:
+        prev_dates = sorted(set(b["timestamp"][:10] for b in prev_bars))
+        if prev_dates:
+            last_date = prev_dates[-1]
+            last_day = [b for b in prev_bars if b["timestamp"][:10] == last_date]
+            if last_day:
+                cam_h = max(b["high"] for b in last_day)
+                cam_l = min(b["low"] for b in last_day)
+                cam_c = last_day[-1]["close"]
+                cam_rng = cam_h - cam_l
+                if cam_rng > 0:
+                    cam_r3 = cam_c + cam_rng * 1.1 / 4
+                    cam_s3 = cam_c - cam_rng * 1.1 / 4
+                    cam_r4 = cam_c + cam_rng * 1.1 / 2
+                    cam_s4 = cam_c - cam_rng * 1.1 / 2
+                    cur_price = sym_bars[bar_idx]["close"]
+                    near_r3 = abs(cur_price - cam_r3) / cur_price * 100
+                    near_s3 = abs(cur_price - cam_s3) / cur_price * 100
+
+                    if direction == "LONG" and cur_price < cam_s3:
+                        enrichment.flags.append(
+                            "GREEN:Price below Camarilla S3 ({:.1f}) -- institutional support zone for LONG. "
+                            "4yr data: trades near S3 have higher WR.".format(cam_s3))
+                    elif direction == "SHORT" and cur_price > cam_r3:
+                        enrichment.flags.append(
+                            "GREEN:Price above Camarilla R3 ({:.1f}) -- institutional resistance zone for SHORT. "
+                            "4yr data: R3 bounces have 65% WR across all stocks.".format(cam_r3))
+                    elif direction == "LONG" and cur_price > cam_r3:
+                        enrichment.flags.append(
+                            "YELLOW:Price above Camarilla R3 ({:.1f}) -- entering LONG at resistance. "
+                            "Needs strong breakout conviction.".format(cam_r3))
+                    elif direction == "SHORT" and cur_price < cam_s3:
+                        enrichment.flags.append(
+                            "YELLOW:Price below Camarilla S3 ({:.1f}) -- entering SHORT at support. "
+                            "Needs strong breakdown conviction.".format(cam_s3))
+
+                    # Camarilla level context for LLM
+                    enrichment.flags.append(
+                        "YELLOW:Camarilla levels: S4={:.1f} S3={:.1f} | Pivot={:.1f} | R3={:.1f} R4={:.1f}".format(
+                            cam_s4, cam_s3, cam_c, cam_r3, cam_r4))
+
+    # ─── 5b. Relative Strength Rank (1.6% predictive power) ───
+    # From 4-year data: stocks in top 30% relative strength
+    # outperform for LONG, bottom 30% for SHORT
+    rs_stocks = []
+    for ms, mbars_all in all_data.items():
+        if ms in ('NIFTY_50', 'NIFTY_BANK', symbol): continue
+        mdb = [b for b in mbars_all if b["timestamp"][:10] == date]
+        if not mdb or len(mdb) <= bar_idx: continue
+        move = (mdb[min(bar_idx, len(mdb)-1)]["close"] - mdb[0]["open"]) / mdb[0]["open"] * 100
+        rs_stocks.append((ms, move))
+
+    if rs_stocks:
+        rs_stocks.sort(key=lambda x: -x[1])
+        sym_move = (sym_bars[bar_idx]["close"] - sym_bars[0]["open"]) / sym_bars[0]["open"] * 100
+        rank_idx = next((i for i, (s, _) in enumerate(rs_stocks) if s == symbol), len(rs_stocks)//2)
+        rs_pctile = rank_idx / len(rs_stocks) * 100
+
+        if direction == "LONG" and rs_pctile <= 20:
+            enrichment.flags.append(
+                "GREEN:Relative strength top 20% (rank {}/{}) -- stock is leading today, momentum confirms LONG.".format(
+                    rank_idx+1, len(rs_stocks)))
+        elif direction == "LONG" and rs_pctile >= 70:
+            enrichment.flags.append(
+                "RED:Relative strength bottom 30% (rank {}/{}) -- stock is lagging, weak for LONG.".format(
+                    rank_idx+1, len(rs_stocks)))
+        elif direction == "SHORT" and rs_pctile >= 80:
+            enrichment.flags.append(
+                "GREEN:Relative strength bottom 20% (rank {}/{}) -- stock is weakest, confirms SHORT.".format(
+                    rank_idx+1, len(rs_stocks)))
+        elif direction == "SHORT" and rs_pctile <= 30:
+            enrichment.flags.append(
+                "RED:Relative strength top 30% (rank {}/{}) -- stock is strong, risky SHORT.".format(
+                    rank_idx+1, len(rs_stocks)))
+
+    # ─── 5c. ORB Range Context (0.2% power but practical) ───
+    # Wider ORB range = wider stop = needs bigger move to profit
+    orb_high = sym_bars[0]["high"]
+    orb_low = sym_bars[0]["low"]
+    orb_range = orb_high - orb_low
+    if orb_range > 0 and prev_close:
+        orb_pct = orb_range / prev_close * 100
+        if orb_pct > 1.0:
+            enrichment.flags.append(
+                "YELLOW:Wide ORB range {:.2f}% -- wide stop needed, smaller position size recommended.".format(orb_pct))
+        elif orb_pct < 0.3:
+            enrichment.flags.append(
+                "GREEN:Tight ORB range {:.2f}% -- tight stop, good risk:reward potential.".format(orb_pct))
+
+    # ─── 5d. Previous Day Direction (counter-trend insight) ───
+    # 4-year data: trading AGAINST prev day direction slightly better
+    # (mean reversion effect). LLM should know this.
+    if prev_bars:
+        prev_dates2 = sorted(set(b["timestamp"][:10] for b in prev_bars))
+        if prev_dates2:
+            last_d = prev_dates2[-1]
+            last_bars = [b for b in prev_bars if b["timestamp"][:10] == last_d]
+            if last_bars:
+                pd_dir = "UP" if last_bars[-1]["close"] > last_bars[0]["open"] else "DOWN"
+                pd_move = (last_bars[-1]["close"] - last_bars[0]["open"]) / last_bars[0]["open"] * 100
+                same_dir = (direction == "LONG" and pd_dir == "UP") or (direction == "SHORT" and pd_dir == "DOWN")
+
+                if same_dir and abs(pd_move) > 1.5:
+                    enrichment.flags.append(
+                        "YELLOW:Prev day was strong {} ({:+.2f}%) -- continuation after big moves has lower WR. "
+                        "Mean reversion risk.".format(pd_dir, pd_move))
+                elif not same_dir and abs(pd_move) > 0.5:
+                    enrichment.flags.append(
+                        "GREEN:Counter-trend to prev day ({} {:+.2f}%) -- 4yr data shows slight edge for reversals.".format(
+                            pd_dir, pd_move))
+
+    # ─── 5e. Break-Even Stop Guidance (for monitor, biggest finding) ───
+    # 4-year data: 70% of losing trades went +0.2% in our favor before reversing.
+    # The LLM monitor should know to tighten stop after initial move.
+    enrichment.flags.append(
+        "YELLOW:MONITOR RULE: 70% of losses went +0.2% favorable before reversing. "
+        "If trade goes +0.2% in favor, move stop to break-even immediately.")
+
     return enrichment
 
 

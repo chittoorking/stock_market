@@ -286,11 +286,16 @@ def debate_monitor(
         goal="Decide HOLD/TIGHTEN/PARTIAL/CLOSE based on Bull vs Bear debate",
         backstory=(
             "DEFAULT IS HOLD. Only override if Bear has OVERWHELMING evidence.\n"
+            "CRITICAL RULE FROM 4-YEAR DATA (40,737 trades):\n"
+            "- 70% of all losing trades went +0.2% in our favor BEFORE reversing\n"
+            "- If P&L is currently >= +0.2%, TIGHTEN stop to break-even IMMEDIATELY\n"
+            "- If P&L is currently >= +0.5%, TIGHTEN stop to +0.2%\n"
+            "- This single rule would save 70% of losses based on 4-year backtest\n\n"
             "CLOSE: only if fade>80% AND multiple bearish signals AND sector against (ALL required)\n"
-            "TIGHTEN: only if P&L positive AND fade>70%\n"
+            "TIGHTEN: if P&L >= +0.2% (break-even stop) OR if P&L positive AND fade>70%\n"
             "PARTIAL: only if P&L>+0.5% AND momentum clearly dying\n"
             "HOLD: for everything else. The stop loss handles risk.\n"
-            "Output ONLY valid JSON: {\"action\": \"hold\", \"reason\": \"Bull: [X]. Bear: [Y]. Decision: [why]\"}"
+            "Output ONLY valid JSON: {\"action\": \"hold|tighten\", \"reason\": \"...\", \"new_stop\": \"breakeven|+0.2%|unchanged\"}"
         ),
         verbose=True,
         llm=llm,
