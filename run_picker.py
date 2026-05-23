@@ -52,8 +52,7 @@ print(f"STOCK PICKER MODE | {len(test_dates)} days | LLM picks 1 stock, system t
 
 
 def build_market_snapshot(date, scan_bar=6):
-    """Build what a trader sees at 9:45 AM — raw state of all 45 stocks."""
-    lines = []
+    """Full market state — ALL stocks, bar-by-bar momentum, not just snapshot."""
     stocks = []
 
     for sym in sorted(date_bars[date].keys()):
@@ -76,16 +75,38 @@ def build_market_snapshot(date, scan_bar=6):
         vwap = tp_vol/cum_vol if cum_vol > 0 else db[scan_bar]['close']
         vwap_dist = (db[scan_bar]['close'] - vwap) / vwap * 100
 
-        # Volume
         vol = sum(b['volume'] for b in bsf)
-
-        # Last 3 bars direction
         last3 = sum(1 for b in bsf[-3:] if b['close'] > b['open'])
+
+        # Bar-by-bar momentum: is each bar accelerating or decelerating?
+        bar_moves = []
+        for i in range(1, len(bsf)):
+            bm = (bsf[i]['close'] - bsf[i-1]['close']) / bsf[i-1]['close'] * 100
+            bar_moves.append(round(bm, 3))
+
+        # Momentum acceleration: are recent bars getting bigger?
+        if len(bar_moves) >= 4:
+            first_half = sum(abs(m) for m in bar_moves[:3])
+            second_half = sum(abs(m) for m in bar_moves[3:])
+            accel = 'ACCEL' if second_half > first_half * 1.2 else 'DECEL' if second_half < first_half * 0.8 else 'STEADY'
+        else:
+            accel = 'N/A'
+
+        # Consecutive direction (are bars all same color?)
+        consec_green = 0; consec_red = 0
+        for b in reversed(bsf[1:]):
+            if b['close'] > b['open']: consec_green += 1
+            else: break
+        for b in reversed(bsf[1:]):
+            if b['close'] < b['open']: consec_red += 1
+            else: break
+        streak = f'{consec_green}G' if consec_green > consec_red else f'{consec_red}R'
 
         stocks.append({
             'sym': sym, 'move': move, 'gap': gap, 'body': bar0_body_pct,
             'bar0': bar0_dir, 'vwap': vwap_dist, 'vol': vol, 'last3': last3,
-            'price': db[scan_bar]['close'],
+            'price': db[scan_bar]['close'], 'accel': accel, 'streak': streak,
+            'bar_moves': bar_moves,
         })
 
     # Market breadth
@@ -94,39 +115,70 @@ def build_market_snapshot(date, scan_bar=6):
     tot = len(stocks)
     regime = 'TRENDING UP' if up/tot > 0.6 else 'TRENDING DOWN' if dn/tot > 0.6 else 'CHOPPY'
 
-    header = f"DATE: {date} | Market: {up}/{tot} up, {dn}/{tot} down | {regime}\n"
+    header = f"DATE: {date} | Market: {up}/{tot} up, {dn}/{tot} down | {regime}\n\n"
 
-    # Sort by absolute move (biggest movers first)
-    stocks.sort(key=lambda x: -abs(x['move']))
+    # Show ALL stocks grouped by category
+    # 1. Big movers (>1%) — these are the obvious picks
+    big = [s for s in stocks if abs(s['move']) > 1.0]
+    big.sort(key=lambda x: -abs(x['move']))
 
-    stock_lines = []
-    for s in stocks[:20]:  # Top 20 movers
-        stock_lines.append(
-            f"  {s['sym']:>12} | move:{s['move']:+5.2f}% | gap:{s['gap']:+5.2f}% | "
-            f"bar0:{s['bar0']} body={s['body']:.0f}% | vwap:{s['vwap']:+.2f}% | "
-            f"last3:{s['last3']}G/{3-s['last3']}R | price:{s['price']:.1f}"
+    # 2. Building momentum quietly (0.3-1%, accelerating)
+    building = [s for s in stocks if 0.3 < abs(s['move']) <= 1.0 and s['accel'] == 'ACCEL']
+    building.sort(key=lambda x: -abs(x['move']))
+
+    # 3. Quiet with volume (small move but high volume = coiling)
+    quiet_vol = [s for s in stocks if abs(s['move']) <= 0.3 and s['vol'] > sum(ss['vol'] for ss in stocks)/len(stocks)*1.5]
+
+    lines = [header]
+    lines.append("BIG MOVERS (>1%):")
+    for s in big[:15]:
+        bm_str = ' '.join(f'{m:+.2f}' for m in s['bar_moves'][-4:])
+        lines.append(
+            f"  {s['sym']:>12} | {s['move']:+5.2f}% | gap:{s['gap']:+5.2f}% | bar0:{s['bar0']} body={s['body']:.0f}% | "
+            f"{s['accel']} | streak:{s['streak']} | bars:[{bm_str}]"
         )
 
-    return header + "\n".join(stock_lines), stocks
+    lines.append("\nBUILDING MOMENTUM (0.3-1%, accelerating):")
+    for s in building[:10]:
+        bm_str = ' '.join(f'{m:+.2f}' for m in s['bar_moves'][-4:])
+        lines.append(
+            f"  {s['sym']:>12} | {s['move']:+5.2f}% | gap:{s['gap']:+5.2f}% | bar0:{s['bar0']} body={s['body']:.0f}% | "
+            f"{s['accel']} | streak:{s['streak']} | bars:[{bm_str}]"
+        )
+
+    lines.append("\nQUIET + HIGH VOLUME (coiling?):")
+    for s in quiet_vol[:5]:
+        lines.append(f"  {s['sym']:>12} | {s['move']:+5.2f}% | vol:{s['vol']:,}")
+
+    return "\n".join(lines), stocks
 
 
 def llm_pick(snapshot, api_key):
     """LLM picks exactly 1 stock and direction."""
     system = """You are an expert NSE intraday trader. You see all 45 stocks at 9:45 AM.
 
-Your job: pick THE ONE stock that will move the most in a predictable direction today.
+Your job: pick THE ONE stock that will make the biggest PREDICTABLE move today.
 
-What to look for:
-- Big morning move with WEAK opening bar (low body %) = likely to reverse
-- Big morning move with STRONG body (>80%) + sector confirming = likely to continue
-- Stock that gapped against its sector = will snap back
-- Stock with unusual volume = institutional interest
-- CHOPPY market = fade the biggest movers. TRENDING market = ride momentum.
+CRITICAL LESSONS FROM 4 YEARS OF DATA:
+1. DO NOT just pick the biggest morning mover. Big movers (+3%+) often CONTINUE, not reverse.
+   If a stock gapped +3% with 80%+ body, it has REAL momentum — don't short it.
+2. Look for ACCELERATION in the bar-by-bar data. Bars getting bigger = momentum building.
+   A stock moving only +0.8% but ACCELERATING is better than +3% but DECELERATING.
+3. Strong body (>80%) on bar0 + continued direction = MOMENTUM trade (go WITH it).
+   Weak body (<40%) on bar0 + big move = FAKE move, likely reverses.
+4. Check the "BUILDING MOMENTUM" section — these quiet stocks often explode.
+5. Sometimes the best trade is a stock that barely moved but has high volume (coiling).
 
-Pick exactly 1 stock. State direction (LONG or SHORT) and WHY.
+WHAT KILLS TRADES:
+- Fading a strong trend (bar0 body 80%+ and all bars same color = don't fade)
+- Picking an illiquid stock
+- Trading against the market regime
+
+Pick exactly 1 stock. You can also say SKIP if nothing looks convincing.
 
 Output JSON only:
-{"symbol":"STOCKNAME","direction":"LONG or SHORT","reasoning":"2 sentences why this specific stock"}"""
+{"symbol":"STOCKNAME","direction":"LONG or SHORT","reasoning":"2 sentences why"}
+Or: {"symbol":"SKIP","direction":"SKIP","reasoning":"why no good setup"}"""
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
@@ -174,6 +226,9 @@ for date in test_dates:
     reasoning = pick.get('reasoning', '')
     print(f"\n  LLM PICK ({elapsed:.1f}s): {direction} {sym}")
     print(f"  Reasoning: {reasoning}")
+
+    if sym == 'SKIP' or direction == 'SKIP':
+        print(f"  LLM says SKIP today.\n"); continue
 
     # Trade it mechanically
     db = date_bars[date].get(sym, [])
