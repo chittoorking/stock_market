@@ -34,7 +34,9 @@ for sym,bars in all_data.items():
             daily_ctx[(d,sym)]={'trend':'UP' if up>=4 else 'DOWN' if up<=1 else 'SIDE', 'bouncing': bouncing}
 print('Done.\n', flush=True)
 
-test_dates=all_dates[-100:]
+import argparse
+_p=argparse.ArgumentParser();_p.add_argument('--days',type=int,default=100);_a,_=_p.parse_known_args()
+test_dates=all_dates[-_a.days:]
 scan_bar=10
 
 def simulate(date, signal, use_new_rules=False):
@@ -99,12 +101,16 @@ def score_signal(s, regime, use_new_rules=False):
     if use_new_rules:
         # Rule 3: No CAM_R3 SHORT when bar0 GREEN body > 70%
         if s['type']=='CAM_R3' and s['dir']=='SHORT' and s.get('b0_green') and s.get('b0_body',0)>70: sc-=5
+        # Rule 4: No CAM_R3 LONG when bar0 RED body > 70%
+        if s['type']=='CAM_R3' and s['dir']=='LONG' and not s.get('b0_green') and s.get('b0_body',0)>70: sc-=5
         # Rule 6: Bounce detection
         if s['dir']=='SHORT' and s.get('bouncing'): sc-=3
         # Rule 7: Volume filter
         if s.get('vol',99999)<20000: sc-=3
         # Rule 8: Prefer high volume
         if s.get('vol',0)>100000: sc+=1
+        # Rule 11: Morning momentum for CAM_R3 SHORT
+        if s['type']=='CAM_R3' and s['dir']=='SHORT' and s.get('morning',0)>0.5: sc-=2
     return sc
 
 results_old=[]; results_new=[]
@@ -128,13 +134,14 @@ for date in test_dates:
         b0_green=db[0]['close']>db[0]['open']
         vol=sum(b['volume'] for b in db[:11])/11
 
+        morning=(db[scan_bar]['close']-db[0]['open'])/db[0]['open']*100 if db[0]['open']>0 else 0
         rh=db[0]['high'];rl=db[0]['low'];rs=rh-rl
         if rs>0:
             for j in range(1,scan_bar+1):
                 if db[j]['close']>rh and db[j]['volume']>db[0]['volume']:
-                    signals.append({'sym':sym,'type':'ORB','dir':'LONG','stop':rl,'risk':round((db[j]['close']-rl)/db[j]['close']*100,2),'trend':ctx.get('trend','?'),'bouncing':ctx.get('bouncing',False),'b0_body':b0_body,'b0_green':b0_green,'vol':vol}); break
+                    signals.append({'sym':sym,'type':'ORB','dir':'LONG','stop':rl,'risk':round((db[j]['close']-rl)/db[j]['close']*100,2),'trend':ctx.get('trend','?'),'bouncing':ctx.get('bouncing',False),'b0_body':b0_body,'b0_green':b0_green,'vol':vol,'morning':morning}); break
                 if db[j]['close']<rl and db[j]['volume']>db[0]['volume']:
-                    signals.append({'sym':sym,'type':'ORB','dir':'SHORT','stop':rh,'risk':round((rh-db[j]['close'])/db[j]['close']*100,2),'trend':ctx.get('trend','?'),'bouncing':ctx.get('bouncing',False),'b0_body':b0_body,'b0_green':b0_green,'vol':vol}); break
+                    signals.append({'sym':sym,'type':'ORB','dir':'SHORT','stop':rh,'risk':round((rh-db[j]['close'])/db[j]['close']*100,2),'trend':ctx.get('trend','?'),'bouncing':ctx.get('bouncing',False),'b0_body':b0_body,'b0_green':b0_green,'vol':vol,'morning':morning}); break
 
         pd_dates=sorted(set(b['timestamp'][:10] for b in all_data[sym] if b['timestamp'][:10]<date))
         if pd_dates:
@@ -146,7 +153,7 @@ for date in test_dates:
                     for j in range(1,scan_bar+1):
                         atr=sum(db[k]['high']-db[k]['low'] for k in range(max(0,j-3),j+1))/min(4,j+1)
                         if abs(db[j]['high']-r3)<atr*0.3 and db[j]['close']<r3:
-                            signals.append({'sym':sym,'type':'CAM_R3','dir':'SHORT','stop':r4,'risk':round((r4-db[j]['close'])/db[j]['close']*100,2),'trend':ctx.get('trend','?'),'bouncing':ctx.get('bouncing',False),'b0_body':b0_body,'b0_green':b0_green,'vol':vol}); break
+                            signals.append({'sym':sym,'type':'CAM_R3','dir':'SHORT','stop':r4,'risk':round((r4-db[j]['close'])/db[j]['close']*100,2),'trend':ctx.get('trend','?'),'bouncing':ctx.get('bouncing',False),'b0_body':b0_body,'b0_green':b0_green,'vol':vol,'morning':morning}); break
 
     seen=set();unique=[]
     for s in signals:
