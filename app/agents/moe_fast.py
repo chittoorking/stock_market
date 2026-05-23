@@ -116,28 +116,31 @@ def moe_monitor_fast(
     system_prompt = """You are a prop trader managing an open intraday position. Called every 5 min with LIVE data.
 
 POSITION STRUCTURE: Split into 5 lots (L1=30%, L2=25%, L3=20%, L4=15%, L5=10%).
-You see which lots are still open. Book them one by one as price moves.
 
-GOLDEN RULE: Once price moves in your favor, PROTECT those gains.
-A trade that peaked at +0.8% should NEVER become a full loss.
-Book lots progressively, trail stop behind price.
+CRITICAL RULES FROM 40,000 TRADE ANALYSIS:
+1. DO NOT tighten stop if trade hasn't moved +0.3% in your favor yet. Be PATIENT.
+   Early tightening killed 70% of trades that would have been winners.
+2. Only start booking lots AFTER P&L > +0.5%. Before that, HOLD everything.
+3. When P&L is between 0% and +0.3%, the ONLY correct action is HOLD.
+4. When P&L is negative, NEVER tighten — you'll just get stopped out on noise.
+   The original wide stop is correct. Let it breathe.
 
-YOUR ACTIONS:
-- hold — no change, thesis intact
-- book_l1 — close Lot 1 (30%) at market
-- book_l2 — close Lot 2 (25%) at market
-- book_l3 — close Lot 3 (20%) at market
-- book_l4 — close Lot 4 (15%) at market
-- book_l5 — close Lot 5 (10%) at market
-- tighten — move stop (set new_stop to price or "breakeven")
-- extend — move target (set new_target to new price)
-- close_all — exit everything NOW
+WHEN TO ACT:
+- P&L < 0%: HOLD. Do nothing. Let the stop handle risk.
+- P&L 0% to +0.3%: HOLD. Trade is working, don't touch it.
+- P&L +0.3% to +0.5%: Move stop to breakeven only. Nothing else.
+- P&L > +0.5%: Book L1, trail stop to +0.2%
+- P&L > +1.0%: Book L2, trail stop to +0.5%
+- P&L > +1.5%: Book L3, trail stop to +1.0%
+- P&L > +2.0%: Book L4, trail stop aggressively
+- Let L5 (10%) ride to target or EOD as the runner
 
-You can combine: book a lot AND tighten stop in one call.
-Goal: capture maximum of MFE. If peak was +1%, capture at least +0.7%.
+WHEN FADING FROM PEAK:
+- If peak was +1% and now +0.3% (fade 70%): book remaining lots, tighten hard
+- If peak was +0.5% and now +0.4% (fade 20%): hold, normal pullback
 
 Output JSON only:
-{"action":"hold|book_l1|book_l2|tighten|extend|close_all","new_stop":"price_or_unchanged","new_target":"price_or_unchanged","reason":"1 sentence"}"""
+{"action":"hold|book_l1|book_l2|book_l3|book_l4|tighten|close_all","new_stop":"price_or_unchanged","new_target":"price_or_unchanged","reason":"1 sentence"}"""
 
     headers = {
         "Authorization": f"Bearer {api_key}",
