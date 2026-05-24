@@ -30,14 +30,13 @@ logging.basicConfig(
 log = logging.getLogger('bot')
 
 # ═══ STRATEGY PARAMS (walk-forward verified on 4 years) ═══
-# SHORT: 831 trades, 88.7% WR, Rs 7,805/trade
-# LONG:  750 trades, 87.1% WR, Rs 6,507/trade
-# COMBINED: 1,581 trades, 87.9% WR, Rs 28.4L/year
+# 1,581 trades | 87.9% WR | Rs 7,283/trade | Rs 28.8L/year | 53/53 green months
 TARGET = 1.75
 STOP = 1.50
 SCAN_BAR = 10
-TRAIL_ACTIVATE = 1.00  # When MFE reaches 1.00%, activate trailing stop
-TRAIL_LOCK = 0.075     # Lock in 0.075% profit
+TRAIL_ACTIVATE = 1.00  # When MFE reaches 1.00%, lock in 0.075%
+TRAIL_LOCK = 0.075     # Lock floor (33 losses→wins, 0 winners hurt)
+RUNNER_STEP = 0.25     # After target hit, trail with 0.25% step (free extra profit)
 
 # SHORT-only filters (uptrends don't need these)
 MAX_CONSEC_DOWN = 2    # Skip if stock down 3+ consecutive days
@@ -202,7 +201,7 @@ def simulate(date, signals, date_bars):
         entry = s['entry']; tp = s['target']; sp = s['stop']
         direction = s['direction']
 
-        # Trail lock price
+        # Trail lock price (phase 1: before target)
         if direction == 'SHORT':
             lock_price = entry * (1 - TRAIL_LOCK/100)
         else:
@@ -210,26 +209,51 @@ def simulate(date, signals, date_bars):
 
         ep = db[min(69, len(db)-1)]['close']
         exit_r = 'eod'; mfe = 0; trail_active = False
+        target_hit = False; current_stop = sp
 
         for k in range(scan_bar+1, min(len(db), 70)):
             if direction == 'SHORT':
                 fav = (entry - db[k]['low']) / entry * 100
                 mfe = max(mfe, fav)
-                if mfe >= TRAIL_ACTIVATE: trail_active = True
-                if db[k]['low'] <= tp: ep = tp; exit_r = 'target'; break
-                if trail_active and db[k]['high'] >= lock_price:
-                    ep = lock_price; exit_r = 'trail'; break
-                if not trail_active and db[k]['high'] >= sp:
-                    ep = sp; exit_r = 'stop'; break
+
+                # Phase 1: before target
+                if not target_hit:
+                    if mfe >= TRAIL_ACTIVATE: trail_active = True
+                    if db[k]['low'] <= tp:
+                        # Target hit! Don't close — activate runner
+                        target_hit = True
+                        current_stop = tp  # Lock at target level
+                        continue
+                    if trail_active and db[k]['high'] >= lock_price:
+                        ep = lock_price; exit_r = 'trail'; break
+                    if not trail_active and db[k]['high'] >= sp:
+                        ep = sp; exit_r = 'stop'; break
+                else:
+                    # Phase 2: runner — trail with RUNNER_STEP after target
+                    new_stop = entry * (1 - (mfe - RUNNER_STEP)/100)
+                    if new_stop < current_stop: current_stop = new_stop
+                    if db[k]['high'] >= current_stop:
+                        ep = current_stop; exit_r = 'runner'; break
+
             else:  # LONG
                 fav = (db[k]['high'] - entry) / entry * 100
                 mfe = max(mfe, fav)
-                if mfe >= TRAIL_ACTIVATE: trail_active = True
-                if db[k]['high'] >= tp: ep = tp; exit_r = 'target'; break
-                if trail_active and db[k]['low'] <= lock_price:
-                    ep = lock_price; exit_r = 'trail'; break
-                if not trail_active and db[k]['low'] <= sp:
-                    ep = sp; exit_r = 'stop'; break
+
+                if not target_hit:
+                    if mfe >= TRAIL_ACTIVATE: trail_active = True
+                    if db[k]['high'] >= tp:
+                        target_hit = True
+                        current_stop = tp
+                        continue
+                    if trail_active and db[k]['low'] <= lock_price:
+                        ep = lock_price; exit_r = 'trail'; break
+                    if not trail_active and db[k]['low'] <= sp:
+                        ep = sp; exit_r = 'stop'; break
+                else:
+                    new_stop = entry * (1 + (mfe - RUNNER_STEP)/100)
+                    if new_stop > current_stop: current_stop = new_stop
+                    if db[k]['low'] <= current_stop:
+                        ep = current_stop; exit_r = 'runner'; break
 
         if direction == 'SHORT':
             pnl = (entry - ep) / entry * 100
