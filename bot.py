@@ -28,11 +28,12 @@ logging.basicConfig(
 )
 log = logging.getLogger('bot')
 
-# ═══ STRATEGY PARAMS (tuned on 4729 trades, grid search optimized) ═══
-# Old: T=1.50 S=1.00 → 67% WR, Rs 3,322/trade
-# New: T=2.50 S=2.00 → 70% WR, Rs 3,863/trade (+16%)
-TARGET = 2.50
-STOP = 2.00
+# ═══ STRATEGY PARAMS (tuned + walk-forward verified) ═══
+# Original: T=1.50 S=1.00 → 67% WR, Rs 3,322/trade, Sharpe 7.22
+# Tuned:    T=1.75 S=1.50 → 70% WR, Rs 3,730/trade, Sharpe 7.24
+# T=2.50/S=2.00 rejected: higher returns but 78% worse worst day, overfits
+TARGET = 1.75
+STOP = 1.50
 SCAN_BAR = 10
 MAX_TRADES = 45  # Take ALL qualifying signals. More trades = more compounding.
 SIZING = 0.20  # 20% of AVAILABLE capital per trade. Capital returns to pool when trade closes.
