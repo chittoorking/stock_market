@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.live.txt .
+RUN pip install --no-cache-dir -r requirements.live.txt
+
+# Copy live trading system only
+COPY live/ /app/live/
+COPY run_live.py /app/
+COPY run_auth.py /app/
+COPY bot.py /app/
+
+# Historical data (mounted as volume in production)
+RUN mkdir -p /app/data/5min /app/journal
+
+ENV CAPITAL=100000
+ENV DATA_DIR=/app/data/5min
+ENV JOURNAL_DIR=/app/journal
+ENV TOKEN_FILE=/app/data/upstox_token.txt
+
+CMD ["python", "run_live.py"]

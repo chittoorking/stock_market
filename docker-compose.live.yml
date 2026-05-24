@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  cam-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.live
+    container_name: cam-bot-v3
+    env_file:
+      - .env.live
+    volumes:
+      - ./data:/app/data          # Historical data + token file
+      - ./journal:/app/journal    # Daily trade journals
+    restart: unless-stopped
+    # Bot runs at 10:15 AM IST, exits by 3:15 PM
+    # Use cron or systemd timer to start daily

@@ -1,0 +1,15 @@
+# Secrets
+.env.live
+upstox_token.txt
+data/upstox_token.txt
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
