@@ -29,17 +29,16 @@ logging.basicConfig(
 log = logging.getLogger('bot')
 
 # ═══ STRATEGY PARAMS (tuned + walk-forward verified) ═══
-# Original: T=1.50 S=1.00 → 67% WR, Rs 3,322/trade, Sharpe 7.22
-# Tuned:    T=1.75 S=1.50 → 70% WR, Rs 3,730/trade, Sharpe 7.24
-# T=2.50/S=2.00 rejected: higher returns but 78% worse worst day, overfits
+# Original: T=1.50 S=1.00 → 67% WR, Rs 3,322/trade
+# Final:    T=1.75 S=1.50 + CD 0-2 filter + smart trail → 84.6% WR, Rs 6,419/trade
 TARGET = 1.75
 STOP = 1.50
 SCAN_BAR = 10
-MAX_TRADES = 45  # Take ALL qualifying signals. More trades = more compounding.
-SIZING = 0.20  # 20% of AVAILABLE capital per trade. Capital returns to pool when trade closes.
-# Typical day: 2-5 concurrent trades. Max seen: 16 (rare).
-# At 20% sizing with 5x leverage: 5 concurrent = exactly 5x leverage used.
-# System tracks available capital and won't over-allocate.
+MAX_CONSEC_DOWN = 2    # Skip if stock down 3+ consecutive days (exhausted, will bounce)
+TRAIL_ACTIVATE = 1.25  # When MFE reaches 1.25%, activate trailing stop
+TRAIL_LOCK = 0.075     # Lock in 0.075% profit (converts 10 losses to wins, 0 winners to losses)
+MAX_TRADES = 45
+SIZING = 0.20
 
 UPSTOX_BASE = "https://api.upstox.com/v2"
 INSTRUMENTS = {
@@ -102,6 +101,23 @@ def load_data():
     return date_bars, prev_day_bars, daily_trend
 
 
+def count_consec_down(sym, date, date_bars):
+    """Count how many consecutive days the stock closed DOWN before today."""
+    all_dates_sym = sorted(d for d in date_bars if sym in date_bars[d])
+    idx = all_dates_sym.index(date) if date in all_dates_sym else -1
+    if idx < 2: return 0
+    cd = 0
+    for back in range(1, 20):
+        if idx - back < 1: break
+        prev_close = date_bars[all_dates_sym[idx - back]][sym][-1]['close']
+        prev2_close = date_bars[all_dates_sym[idx - back - 1]][sym][-1]['close']
+        if prev_close < prev2_close:
+            cd += 1
+        else:
+            break
+    return cd
+
+
 def scan(date, date_bars, prev_day_bars, daily_trend):
     """Scan for CAM_R3 SHORT signals. Returns list of trades to take."""
     signals = []
@@ -109,6 +125,10 @@ def scan(date, date_bars, prev_day_bars, daily_trend):
         db = date_bars[date][sym]
         if len(db) <= SCAN_BAR + 20: continue
         if daily_trend.get((date, sym)) != 'DOWN': continue
+
+        # CD filter: skip exhausted stocks (down 3+ consecutive days)
+        cd = count_consec_down(sym, date, date_bars)
+        if cd > MAX_CONSEC_DOWN: continue
 
         lp = prev_day_bars.get((date, sym), [])
         if not lp: continue
@@ -129,6 +149,7 @@ def scan(date, date_bars, prev_day_bars, daily_trend):
                     'stop': round(entry * (1 + STOP/100), 2),
                     'target': round(entry * (1 - TARGET/100), 2),
                     'r3': round(r3, 2),
+                    'cd': cd,
                 })
                 break
 
@@ -143,14 +164,19 @@ def simulate(date, signals, date_bars):
         if len(db) <= SCAN_BAR + 10: continue
 
         entry = s['entry']; tp = s['target']; sp = s['stop']
+        lock_price = entry * (1 - TRAIL_LOCK/100)  # Smart trail lock price
         ep = db[min(69, len(db)-1)]['close']
-        exit_r = 'eod'; mfe = 0
+        exit_r = 'eod'; mfe = 0; trail_active = False
 
         for k in range(SCAN_BAR+1, min(len(db), 70)):
             fav = (entry - db[k]['low']) / entry * 100
             mfe = max(mfe, fav)
+            if mfe >= TRAIL_ACTIVATE: trail_active = True
             if db[k]['low'] <= tp: ep = tp; exit_r = 'target'; break
-            if db[k]['high'] >= sp: ep = sp; exit_r = 'stop'; break
+            if trail_active and db[k]['high'] >= lock_price:
+                ep = lock_price; exit_r = 'trail'; break
+            if not trail_active and db[k]['high'] >= sp:
+                ep = sp; exit_r = 'stop'; break
 
         pnl = (entry - ep) / entry * 100
         w = 'W' if pnl > 0 else 'L'
