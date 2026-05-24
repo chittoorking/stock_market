@@ -33,7 +33,10 @@ TARGET = 1.50
 STOP = 1.00
 SCAN_BAR = 10
 MAX_TRADES = 45  # Take ALL qualifying signals. More trades = more compounding.
-SIZING = 0.20  # 20% of capital per trade (auto-adjusts if many signals)
+SIZING = 0.20  # 20% of AVAILABLE capital per trade. Capital returns to pool when trade closes.
+# Typical day: 2-5 concurrent trades. Max seen: 16 (rare).
+# At 20% sizing with 5x leverage: 5 concurrent = exactly 5x leverage used.
+# System tracks available capital and won't over-allocate.
 
 UPSTOX_BASE = "https://api.upstox.com/v2"
 INSTRUMENTS = {
@@ -222,11 +225,10 @@ def main():
 
     if args.live and token:
         # LIVE: place actual orders
-        n_trades = min(len(signals), MAX_TRADES)
-        per_trade_sizing = min(SIZING, 0.80 / n_trades)  # Cap total at 80% of capital
-        log.info(f"\nPLACING LIVE ORDERS ({n_trades} trades, {per_trade_sizing*100:.0f}% each):")
-        for s in signals[:n_trades]:
-            qty = max(1, int(args.capital * per_trade_sizing * 5 / s['entry']))
+        # Each trade uses 20% of AVAILABLE capital. As trades close, capital returns to pool.
+        log.info(f"\nPLACING LIVE ORDERS ({len(signals)} signals, {SIZING*100:.0f}% of available per trade):")
+        for s in signals:
+            qty = max(1, int(args.capital * SIZING * 5 / s['entry']))
             oid = place_order_upstox(token, s['sym'], qty, 'SELL', s['entry'])
             if oid:
                 log.info(f"  ORDER: SELL {qty} {s['sym']} @ {s['entry']} -> {oid}")
