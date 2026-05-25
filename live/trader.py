@@ -86,21 +86,16 @@ class LiveTrader:
             if trend == 'SIDE':
                 continue
 
-            # Get today's bars (first 50 min = 10 bars)
+            # Get today's bars (1-min candles, aggregate to 5-min)
             inst = config.INSTRUMENTS[sym]
-            candles = api.get_intraday_candles(inst)
-            if not candles or len(candles) < config.SCAN_BAR + 1:
+            candles_1min = api.get_intraday_candles(inst, '1minute')
+            if not candles_1min:
                 continue
 
-            # Convert to bar format
-            today_bars = []
-            for c in sorted(candles, key=lambda x: x[0]):
-                today_bars.append({
-                    'timestamp': c[0][:19],
-                    'open': float(c[1]), 'high': float(c[2]),
-                    'low': float(c[3]), 'close': float(c[4]),
-                    'volume': int(c[5]),
-                })
+            # Aggregate 1-min to 5-min bars
+            today_bars = api.aggregate_1min_to_5min(candles_1min)
+            if len(today_bars) < config.SCAN_BAR + 1:
+                continue
 
             signal = strategy.check_signal(
                 sym, today_bars, self.prev_stats[sym],

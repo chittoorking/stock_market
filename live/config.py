@@ -27,11 +27,12 @@ UPSTOX_ACCESS_TOKEN = os.getenv('UPSTOX_ACCESS_TOKEN', '')
 UPSTOX_BASE = 'https://api.upstox.com/v2'
 
 # Token file (auto-refreshed daily)
-TOKEN_FILE = Path(os.getenv('TOKEN_FILE', '/app/data/upstox_token.txt'))
+HOME = Path.home()
+TOKEN_FILE = Path(os.getenv('TOKEN_FILE', str(HOME / 'trading-bot/data/upstox_token.txt')))
 
 # ═══ DATA ═══
-DATA_DIR = Path(os.getenv('DATA_DIR', '/app/data/5min'))
-JOURNAL_DIR = Path(os.getenv('JOURNAL_DIR', '/app/journal'))
+DATA_DIR = Path(os.getenv('DATA_DIR', str(HOME / 'trading-bot/data/5min')))
+JOURNAL_DIR = Path(os.getenv('JOURNAL_DIR', str(HOME / 'trading-bot/journal')))
 
 # ═══ INSTRUMENTS (45 NIFTY 50 stocks) ═══
 INSTRUMENTS = {

@@ -8,11 +8,13 @@ log = logging.getLogger('strategy')
 
 def compute_daily_trend(daily_closes):
     """Compute 5-day trend from list of daily closes.
+    Uses last 5 COMPLETED days (excludes today if included).
     Returns 'UP', 'DOWN', or 'SIDE'.
     """
-    if len(daily_closes) < 5:
+    if len(daily_closes) < 6:
         return 'SIDE'
-    last5 = daily_closes[-5:]
+    # Use 5 days BEFORE the last entry (last entry might be today/incomplete)
+    last5 = daily_closes[-6:-1]
     up = sum(1 for j in range(1, len(last5)) if last5[j] > last5[j - 1])
     if up >= 4: return 'UP'
     if up <= 1: return 'DOWN'
@@ -20,11 +22,15 @@ def compute_daily_trend(daily_closes):
 
 
 def count_consec(daily_closes, direction):
-    """Count consecutive days in given direction from most recent."""
-    if len(daily_closes) < 2:
+    """Count consecutive days in given direction BEFORE today.
+    daily_closes[-1] is today (or most recent) — skip it.
+    Start counting from yesterday backwards.
+    """
+    if len(daily_closes) < 3:
         return 0
     cd = 0
-    for i in range(len(daily_closes) - 1, 0, -1):
+    # Start from second-to-last (yesterday) going backwards
+    for i in range(len(daily_closes) - 2, 0, -1):
         if direction == 'DOWN' and daily_closes[i] < daily_closes[i - 1]:
             cd += 1
         elif direction == 'UP' and daily_closes[i] > daily_closes[i - 1]:

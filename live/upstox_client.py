@@ -45,14 +45,17 @@ def get_historical_candles(instrument_key, interval, from_date, to_date):
     return []
 
 
-def get_intraday_candles(instrument_key, interval='5minute'):
-    """Fetch today's intraday candle data (needs auth)."""
+def get_intraday_candles(instrument_key, interval='1minute'):
+    """Fetch today's intraday candle data (needs auth). Returns 5-min aggregated bars."""
     url = f'{config.UPSTOX_BASE}/historical-candle/intraday/{instrument_key}/{interval}'
     try:
         r = requests.get(url, headers=headers(), timeout=15)
         if r.status_code == 200:
-            data = r.json()
-            return data.get('data', {}).get('candles', [])
+            candles = r.json().get('data', {}).get('candles', [])
+            if interval == '1minute' and candles:
+                # Return raw 1-min candles — caller will aggregate if needed
+                return candles
+            return candles
         log.error(f'Intraday data error {r.status_code}: {r.text[:200]}')
     except Exception as e:
         log.error(f'Intraday data error: {e}')
@@ -163,6 +166,26 @@ def get_orders():
     return []
 
 
+def aggregate_1min_to_5min(candles_1min):
+    """Aggregate 1-minute candles into 5-minute candles."""
+    bars_5min = []
+    # Sort chronologically
+    sorted_candles = sorted(candles_1min, key=lambda x: x[0])
+
+    for i in range(0, len(sorted_candles), 5):
+        chunk = sorted_candles[i:i+5]
+        if not chunk: break
+        bars_5min.append({
+            'timestamp': chunk[0][0][:19],
+            'open': float(chunk[0][1]),
+            'high': max(float(c[2]) for c in chunk),
+            'low': min(float(c[3]) for c in chunk),
+            'close': float(chunk[-1][4]),
+            'volume': sum(int(c[5]) for c in chunk),
+        })
+    return bars_5min
+
+
 def load_previous_days(sym, num_days=10):
     """Load last N days of 5-min candles for a stock from Upstox API."""
     inst = config.INSTRUMENTS.get(sym)
@@ -171,18 +194,23 @@ def load_previous_days(sym, num_days=10):
     to_date = datetime.now().strftime('%Y-%m-%d')
     from_date = (datetime.now() - timedelta(days=num_days + 5)).strftime('%Y-%m-%d')
 
-    candles = get_historical_candles(inst, '5minute', from_date, to_date)
-    if not candles: return []
+    # API only supports 1minute and 30minute, not 5minute
+    # Fetch 1-minute and aggregate to 5-minute
+    candles = get_historical_candles(inst, '1minute', from_date, to_date)
+    if not candles:
+        # Fallback: try 30minute for daily trend (less precise but works)
+        candles = get_historical_candles(inst, '30minute', from_date, to_date)
+        if not candles: return []
+        bars = []
+        for c in sorted(candles, key=lambda x: x[0]):
+            bars.append({
+                'timestamp': c[0][:19],
+                'open': float(c[1]),
+                'high': float(c[2]),
+                'low': float(c[3]),
+                'close': float(c[4]),
+                'volume': int(c[5]),
+            })
+        return bars
 
-    # Convert to our bar format
-    bars = []
-    for c in sorted(candles, key=lambda x: x[0]):
-        bars.append({
-            'timestamp': c[0][:19],
-            'open': float(c[1]),
-            'high': float(c[2]),
-            'low': float(c[3]),
-            'close': float(c[4]),
-            'volume': int(c[5]),
-        })
-    return bars
+    return aggregate_1min_to_5min(candles)
