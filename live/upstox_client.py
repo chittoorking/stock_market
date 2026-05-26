@@ -75,10 +75,12 @@ def get_ltp(instrument_keys):
     return {}
 
 
-def place_order(sym, qty, side, price, order_type='LIMIT', product='I'):
+def place_order(sym, qty, side, price, order_type='MARKET', product='I', trigger_price=0):
     """Place order via Upstox API.
     side: 'BUY' or 'SELL'
-    product: 'I' (intraday) or 'D' (delivery)
+    order_type: 'MARKET' (default), 'LIMIT', 'SL' (stop loss)
+    product: 'I' (intraday)
+    trigger_price: required for SL orders
     """
     inst = config.INSTRUMENTS.get(sym)
     if not inst:
@@ -89,14 +91,26 @@ def place_order(sym, qty, side, price, order_type='LIMIT', product='I'):
         'quantity': qty,
         'product': product,
         'validity': 'DAY',
-        'price': round(price, 2),
         'instrument_token': inst,
         'order_type': order_type,
         'transaction_type': side,
         'disclosed_quantity': 0,
-        'trigger_price': 0,
         'is_amo': False,
     }
+
+    if order_type == 'MARKET':
+        order['price'] = 0
+        order['trigger_price'] = 0
+    elif order_type == 'LIMIT':
+        order['price'] = round(price, 2)
+        order['trigger_price'] = 0
+    elif order_type == 'SL':
+        order['price'] = round(price, 2)
+        order['trigger_price'] = round(trigger_price, 2)
+    elif order_type == 'SL-M':
+        order['price'] = 0
+        order['trigger_price'] = round(trigger_price, 2)
+
     try:
         r = requests.post(f'{config.UPSTOX_BASE}/order/place',
                           headers=headers(), json=order, timeout=10)
@@ -104,7 +118,7 @@ def place_order(sym, qty, side, price, order_type='LIMIT', product='I'):
             data = r.json()
             if data.get('status') == 'success':
                 oid = data.get('data', {}).get('order_id')
-                log.info(f'Order placed: {side} {qty} {sym} @ {price} -> {oid}')
+                log.info(f'Order placed: {side} {qty} {sym} @ {price} type={order_type} -> {oid}')
                 return oid
         log.error(f'Order failed: {r.text[:300]}')
     except Exception as e:

@@ -136,15 +136,16 @@ class LiveTrader:
             self.available -= margin
             return True
         else:
-            # Live: place entry order
+            # Live: place MARKET entry order (fills immediately at best price)
             side = 'SELL' if direction == 'SHORT' else 'BUY'
-            entry_oid = api.place_order(sym, qty, side, entry)
+            entry_oid = api.place_order(sym, qty, side, 0, order_type='MARKET')
             if not entry_oid:
                 return False
 
-            # Place stop loss order
+            # Place SL-M stop loss order (trigger price only, market exit)
             sl_side = 'BUY' if direction == 'SHORT' else 'SELL'
-            sl_oid = api.place_order(sym, qty, sl_side, signal['stop'], order_type='SL')
+            sl_oid = api.place_order(sym, qty, sl_side, 0,
+                                     order_type='SL-M', trigger_price=signal['stop'])
 
             self.positions[sym] = {
                 'signal': signal, 'qty': qty, 'margin': margin,
@@ -216,12 +217,12 @@ class LiveTrader:
             log.info(f'[PAPER] EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
                      f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
         else:
-            # Cancel stop loss order
-            if pos.get('stop_order'):
+            # Cancel stop loss order first
+            if pos.get('stop_order') and pos['stop_order'] != 'PAPER':
                 api.cancel_order(pos['stop_order'])
-            # Place exit order
+            # Place MARKET exit order (price=0 for market orders)
             side = 'BUY' if direction == 'SHORT' else 'SELL'
-            api.place_order(sym, qty, side, exit_price, order_type='MARKET')
+            api.place_order(sym, qty, side, 0, order_type='MARKET')
             log.info(f'EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
                      f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
 
