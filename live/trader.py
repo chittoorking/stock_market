@@ -105,6 +105,8 @@ class LiveTrader:
         signals = []
 
         for sym in config.INSTRUMENTS:
+            if sym in self.positions:  # Skip if already in a trade from GAP/MA
+                continue
             if sym not in self.daily_closes or sym not in self.prev_stats:
                 continue
 
@@ -293,6 +295,8 @@ class LiveTrader:
         signals = []
 
         for sym in config.INSTRUMENTS:
+            if sym in self.positions:  # Skip if already in a trade
+                continue
             if sym not in self.daily_closes:
                 continue
 
