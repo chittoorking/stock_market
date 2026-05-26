@@ -14,7 +14,7 @@ MIN_YD_RANGE = 2.0
 MIN_YD_BODY = 0.2
 
 # ═══ TRADING PARAMS ═══
-CAPITAL = int(os.getenv('CAPITAL', '100000'))  # Starting capital (Rs 1L default)
+CAPITAL = int(os.getenv('CAPITAL', '0'))  # 0 = auto-fetch from Upstox
 SIZING = 0.20  # 20% of available capital per trade
 MAX_TRADES = 45
 LEVERAGE = 5  # Broker intraday leverage

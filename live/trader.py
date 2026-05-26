@@ -31,14 +31,36 @@ class LiveTrader:
         self.paper_mode = paper_mode
         self.capital = config.CAPITAL
         self.available = float(self.capital)
-        self.positions = {}  # sym -> {signal, entry_order_id, stop_order_id, mfe, trail_active, target_hit, qty}
+        self.positions = {}
         self.daily_pnl = 0
         self.today = datetime.now().strftime('%Y-%m-%d')
 
-        # Pre-load historical data for trends
-        self.daily_closes = {}  # sym -> [list of daily closes]
-        self.prev_day_bars = {}  # sym -> [bars]
-        self.prev_stats = {}  # sym -> {high, low, close, range, ...}
+        # Auto-fetch capital from Upstox if not set
+        if self.capital == 0 and not paper_mode:
+            self.capital = self._fetch_available_margin()
+            self.available = float(self.capital)
+
+        self.daily_closes = {}
+        self.prev_day_bars = {}
+        self.prev_stats = {}
+
+    def _fetch_available_margin(self):
+        """Fetch available margin from Upstox account."""
+        try:
+            import requests
+            token = api.get_token()
+            r = requests.get(f'{config.UPSTOX_BASE}/user/get-funds-and-margin',
+                           headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                           timeout=10)
+            if r.status_code == 200:
+                equity = r.json().get('data', {}).get('equity', {})
+                margin = equity.get('available_margin', 0)
+                log.info(f'Fetched capital from Upstox: Rs {margin:,.0f}')
+                return int(margin)
+        except Exception as e:
+            log.error(f'Failed to fetch margin: {e}')
+        log.warning('Using default capital Rs 50,000')
+        return 50000
 
     def load_historical(self):
         """Load last 10 days of data per stock for trend calculation."""
