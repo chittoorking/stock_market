@@ -61,6 +61,7 @@ def compute_prev_day_stats(prev_day_bars):
 
 def check_signal(sym, today_bars, prev_stats, trend, daily_closes):
     """Check if stock has a SHORT or LONG signal.
+    Checks CAM first, then Pivot. Returns first match — no duplicates.
     Returns signal dict or None.
     """
     if len(today_bars) <= config.SCAN_BAR:
@@ -74,7 +75,7 @@ def check_signal(sym, today_bars, prev_stats, trend, daily_closes):
     pc = prev_stats['close']
 
     if trend == 'DOWN':
-        # SHORT filters
+        # SHORT filters (applied to both CAM and Pivot)
         cd = count_consec(daily_closes, 'DOWN')
         if cd > config.MAX_CONSEC_DOWN:
             return None
@@ -83,7 +84,7 @@ def check_signal(sym, today_bars, prev_stats, trend, daily_closes):
         if prev_stats['body_ratio'] < config.MIN_YD_BODY:
             return None
 
-        # Check R3 touch
+        # Level 1: Check CAM R3 first
         r3 = pc + rng * 1.1 / 4
         for j in range(1, config.SCAN_BAR + 1):
             atr = sum(today_bars[k]['high'] - today_bars[k]['low']
@@ -91,20 +92,37 @@ def check_signal(sym, today_bars, prev_stats, trend, daily_closes):
             if abs(today_bars[j]['high'] - r3) < atr * 0.3 and today_bars[j]['close'] < r3:
                 entry = today_bars[config.SCAN_BAR]['close']
                 return {
-                    'sym': sym, 'direction': 'SHORT',
+                    'sym': sym, 'direction': 'SHORT', 'strategy': 'CAM_R3',
                     'entry': round(entry, 2),
                     'stop': round(entry * (1 + config.STOP / 100), 2),
                     'target': round(entry * (1 - config.TARGET / 100), 2),
                     'level': round(r3, 2),
                 }
 
+        # Level 2: No CAM signal → check Pivot R1
+        pp = (prev_stats['high'] + prev_stats['low'] + pc) / 3
+        r1 = 2 * pp - prev_stats['low']
+        for j in range(1, config.SCAN_BAR + 1):
+            atr = sum(today_bars[k]['high'] - today_bars[k]['low']
+                      for k in range(max(0, j - 3), j + 1)) / min(4, j + 1)
+            if abs(today_bars[j]['high'] - r1) < atr * 0.3 and today_bars[j]['close'] < r1:
+                entry = today_bars[config.SCAN_BAR]['close']
+                return {
+                    'sym': sym, 'direction': 'SHORT', 'strategy': 'PIVOT_R1',
+                    'entry': round(entry, 2),
+                    'stop': round(entry * (1 + config.STOP / 100), 2),
+                    'target': round(entry * (1 - 0.75 / 100), 2),  # Pivot uses 0.75% target
+                    'level': round(r1, 2),
+                }
+
     else:  # UP trend
-        # LONG: apply yesterday filter (skip choppy days)
+        # LONG: apply yesterday filter
         if prev_stats['range_pct'] < config.MIN_YD_RANGE:
             return None
         if prev_stats['body_ratio'] < config.MIN_YD_BODY:
             return None
 
+        # Level 1: Check CAM S3 first
         s3 = pc - rng * 1.1 / 4
         for j in range(1, config.SCAN_BAR + 1):
             atr = sum(today_bars[k]['high'] - today_bars[k]['low']
@@ -112,11 +130,27 @@ def check_signal(sym, today_bars, prev_stats, trend, daily_closes):
             if abs(today_bars[j]['low'] - s3) < atr * 0.3 and today_bars[j]['close'] > s3:
                 entry = today_bars[config.SCAN_BAR]['close']
                 return {
-                    'sym': sym, 'direction': 'LONG',
+                    'sym': sym, 'direction': 'LONG', 'strategy': 'CAM_S3',
                     'entry': round(entry, 2),
                     'stop': round(entry * (1 - config.STOP / 100), 2),
                     'target': round(entry * (1 + config.TARGET / 100), 2),
                     'level': round(s3, 2),
+                }
+
+        # Level 2: No CAM signal → check Pivot S1
+        pp = (prev_stats['high'] + prev_stats['low'] + pc) / 3
+        s1 = 2 * pp - prev_stats['high']
+        for j in range(1, config.SCAN_BAR + 1):
+            atr = sum(today_bars[k]['high'] - today_bars[k]['low']
+                      for k in range(max(0, j - 3), j + 1)) / min(4, j + 1)
+            if abs(today_bars[j]['low'] - s1) < atr * 0.3 and today_bars[j]['close'] > s1:
+                entry = today_bars[config.SCAN_BAR]['close']
+                return {
+                    'sym': sym, 'direction': 'LONG', 'strategy': 'PIVOT_S1',
+                    'entry': round(entry, 2),
+                    'stop': round(entry * (1 - config.STOP / 100), 2),
+                    'target': round(entry * (1 + 0.75 / 100), 2),  # Pivot uses 0.75% target
+                    'level': round(s1, 2),
                 }
 
     return None
