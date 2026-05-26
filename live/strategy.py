@@ -99,7 +99,12 @@ def check_signal(sym, today_bars, prev_stats, trend, daily_closes):
                 }
 
     else:  # UP trend
-        # LONG: no CD/yesterday filter
+        # LONG: apply yesterday filter (skip choppy days)
+        if prev_stats['range_pct'] < config.MIN_YD_RANGE:
+            return None
+        if prev_stats['body_ratio'] < config.MIN_YD_BODY:
+            return None
+
         s3 = pc - rng * 1.1 / 4
         for j in range(1, config.SCAN_BAR + 1):
             atr = sum(today_bars[k]['high'] - today_bars[k]['low']
