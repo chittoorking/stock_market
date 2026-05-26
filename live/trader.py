@@ -64,10 +64,10 @@ class LiveTrader:
         return 50000
 
     def load_historical(self):
-        """Load last 10 days of data per stock for trend calculation."""
+        """Load last 30 days of data per stock for trends + MA convergence."""
         log.info('Loading historical data for all stocks...')
         for sym, inst in config.INSTRUMENTS.items():
-            bars = api.load_previous_days(sym, num_days=10)
+            bars = api.load_previous_days(sym, num_days=30)
             if not bars:
                 log.warning(f'No historical data for {sym}')
                 continue
