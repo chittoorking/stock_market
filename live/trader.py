@@ -283,42 +283,89 @@ class LiveTrader:
         jf.write_text(json.dumps(journal, indent=2))
         log.info(f'Journal: {jf}')
 
+    def scan_gap_signals(self):
+        """Scan for gap fill signals at 9:20 AM (after first bar)."""
+        log.info('Scanning for GAP FILL signals...')
+        signals = []
+
+        for sym in config.INSTRUMENTS:
+            if sym not in self.daily_closes:
+                continue
+
+            # Get prev close
+            closes = self.daily_closes[sym]
+            if len(closes) < 2:
+                continue
+            prev_close = closes[-1]  # Last completed day's close
+
+            # Get today's first bar
+            inst = config.INSTRUMENTS[sym]
+            candles = api.get_intraday_candles(inst, '1minute')
+            if not candles:
+                continue
+
+            # Aggregate to 5-min (need at least 1 bar)
+            bars_5min = api.aggregate_1min_to_5min(candles)
+            if not bars_5min:
+                continue
+
+            signal = strategy.check_gap_signal(sym, bars_5min, prev_close)
+            if signal:
+                signals.append(signal)
+                log.info(f'GAP SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}% '
+                         f'entry={signal["entry"]} target={signal["target"]}')
+
+            time.sleep(0.35)
+
+        log.info(f'Found {len(signals)} gap signals')
+        return signals
+
     def run(self):
         """Main trading loop."""
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
-        log.info(f'CAM BOT v3 LIVE | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Target: {config.TARGET}% | Stop: {config.STOP}%')
-        log.info(f'Trail: {config.TRAIL_ACTIVATE}% -> {config.TRAIL_LOCK}% | Runner: {config.RUNNER_STEP}%')
+        log.info(f'CAM BOT v4 | {mode} | Capital: Rs {self.capital:,}')
+        log.info(f'Strategy 1: CAM R3/S3 (89% WR) at 10:15 AM')
+        log.info(f'Strategy 2: GAP FILL (99.8% WR) at 9:20 AM')
         log.info('=' * 60)
 
         # Step 1: Load historical data
         self.load_historical()
 
-        # Step 2: Wait for 10:15 AM
+        # Step 2: GAP FILL scan at 9:20 AM
         now = datetime.now()
-        scan_time = now.replace(hour=10, minute=15, second=0, microsecond=0)
-        if now < scan_time:
-            wait = (scan_time - now).total_seconds()
-            log.info(f'Waiting {wait:.0f}s until 10:15 AM...')
+        gap_scan_time = now.replace(hour=9, minute=20, second=0, microsecond=0)
+        if now < gap_scan_time:
+            wait = (gap_scan_time - now).total_seconds()
+            log.info(f'Waiting {wait:.0f}s until 9:20 AM (gap scan)...')
             time.sleep(wait)
 
-        # Step 3: Scan for signals
-        signals = self.scan_signals()
-        if not signals:
-            log.info('No signals. Done for today.')
+        gap_signals = self.scan_gap_signals()
+        for s in gap_signals:
+            self.enter_trade(s)
+
+        # Step 3: Monitor gap trades until 10:15 AM (most close by then)
+        cam_scan_time = datetime.now().replace(hour=10, minute=15, second=0, microsecond=0)
+        while datetime.now() < cam_scan_time and self.positions:
+            self.monitor_positions()
+            time.sleep(30)  # Check every 30 sec for gap trades (fast target)
+
+        # Step 4: CAM scan at 10:15 AM
+        log.info('--- CAM SCAN at 10:15 AM ---')
+        cam_signals = self.scan_signals()
+        for s in cam_signals[:config.MAX_TRADES]:
+            self.enter_trade(s)
+
+        if not gap_signals and not cam_signals:
+            log.info('No signals from either strategy. Done for today.')
             self.write_journal()
             return
-
-        # Step 4: Enter trades
-        for s in signals[:config.MAX_TRADES]:
-            self.enter_trade(s)
 
         # Step 5: Monitor until 3:00 PM
         close_time = datetime.now().replace(hour=15, minute=0, second=0)
         while datetime.now() < close_time and self.positions:
             self.monitor_positions()
-            time.sleep(60)  # Check every minute
+            time.sleep(60)
 
         # Step 6: Close remaining at EOD
         self.close_all()

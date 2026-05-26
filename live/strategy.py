@@ -122,6 +122,52 @@ def check_signal(sym, today_bars, prev_stats, trend, daily_closes):
     return None
 
 
+def check_gap_signal(sym, today_bars, prev_close):
+    """Check if stock has a gap fill signal.
+    Rules:
+      1. Gap 2%+ from prev close
+      2. First bar reverses by 0.5%+
+      3. SHORT gap-up, LONG gap-down
+      4. Target: 0.5%, Stop: 1.0%
+    Returns signal dict or None.
+    """
+    if not today_bars or not prev_close:
+        return None
+
+    today_open = today_bars[0]['open']
+    gap = (today_open - prev_close) / prev_close * 100
+
+    if abs(gap) < 2.0:
+        return None
+
+    # First bar reversal check
+    fb_ret = (today_bars[0]['close'] - today_bars[0]['open']) / today_bars[0]['open'] * 100
+
+    # Gap UP + first bar RED = SHORT
+    if gap > 0 and fb_ret < -0.5:
+        return {
+            'sym': sym, 'direction': 'SHORT', 'strategy': 'GAP_FILL',
+            'entry': round(today_open, 2),
+            'stop': round(today_open * (1 + 1.0/100), 2),
+            'target': round(today_open * (1 - 0.5/100), 2),
+            'level': round(prev_close, 2),
+            'gap': round(gap, 2),
+        }
+
+    # Gap DOWN + first bar GREEN = LONG
+    if gap < 0 and fb_ret > 0.5:
+        return {
+            'sym': sym, 'direction': 'LONG', 'strategy': 'GAP_FILL',
+            'entry': round(today_open, 2),
+            'stop': round(today_open * (1 - 1.0/100), 2),
+            'target': round(today_open * (1 + 0.5/100), 2),
+            'level': round(prev_close, 2),
+            'gap': round(gap, 2),
+        }
+
+    return None
+
+
 def check_exit(signal, current_price, mfe, trail_active, target_hit):
     """Check if we should exit. Returns (action, exit_price, new_state) or None.
     action: 'target_hit', 'runner_stop', 'trail_stop', 'stop_loss', None
