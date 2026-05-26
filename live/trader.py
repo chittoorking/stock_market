@@ -41,6 +41,7 @@ class LiveTrader:
             self.available = float(self.capital)
 
         self.daily_closes = {}
+        self.daily_volumes = {}
         self.prev_day_bars = {}
         self.prev_stats = {}
 
@@ -84,6 +85,9 @@ class LiveTrader:
 
             # Daily closes for trend
             self.daily_closes[sym] = [by_date[d][-1]['close'] for d in dates]
+
+            # Daily volumes for MA convergence
+            self.daily_volumes[sym] = [sum(b['volume'] for b in by_date[d]) for d in dates]
 
             # Previous day bars
             prev_date = dates[-1] if dates[-1] < self.today else dates[-2] if len(dates) > 1 else None
@@ -320,13 +324,53 @@ class LiveTrader:
         log.info(f'Found {len(signals)} gap signals')
         return signals
 
+    def scan_ma_convergence(self, bar_start, bar_end):
+        """Scan for MA convergence signals."""
+        log.info(f'Scanning for MA CONVERGENCE signals (bar {bar_start}-{bar_end})...')
+        signals = []
+
+        for sym in config.INSTRUMENTS:
+            if sym in self.positions:  # Skip if already in a trade
+                continue
+            if sym not in self.daily_closes:
+                continue
+
+            trend = strategy.compute_daily_trend(self.daily_closes[sym])
+            if trend == 'SIDE':
+                continue
+
+            # Get daily volumes
+            daily_volumes = self.daily_volumes.get(sym, [])
+
+            # Get today's bars
+            inst = config.INSTRUMENTS[sym]
+            candles = api.get_intraday_candles(inst, '1minute')
+            if not candles:
+                continue
+            today_bars = api.aggregate_1min_to_5min(candles)
+
+            signal = strategy.check_ma_convergence(
+                sym, self.daily_closes[sym], daily_volumes,
+                today_bars, trend, bar_start, bar_end
+            )
+            if signal:
+                signals.append(signal)
+                log.info(f'MA CONV SIGNAL: {signal["direction"]} {sym} '
+                         f'strategy={signal["strategy"]} entry={signal["entry"]}')
+
+            time.sleep(0.35)
+
+        log.info(f'Found {len(signals)} MA convergence signals')
+        return signals
+
     def run(self):
         """Main trading loop."""
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
-        log.info(f'CAM BOT v4 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: CAM R3/S3 (89% WR) at 10:15 AM')
-        log.info(f'Strategy 2: GAP FILL (99.8% WR) at 9:20 AM')
+        log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
+        log.info(f'Strategy 1: GAP FILL (99.8% WR) at 9:20 AM')
+        log.info(f'Strategy 2: MA CONVERGENCE (91% WR) at 9:45 AM')
+        log.info(f'Strategy 3: CAM R3/S3 + Pivot (89-96% WR) at 10:15 AM')
         log.info('=' * 60)
 
         # Step 1: Load historical data
@@ -344,30 +388,45 @@ class LiveTrader:
         for s in gap_signals:
             self.enter_trade(s)
 
-        # Step 3: Monitor gap trades until 10:15 AM (most close by then)
+        # Step 3: MA CONVERGENCE scan at 9:45 AM (bar 6-15)
+        ma_scan_time = datetime.now().replace(hour=9, minute=45, second=0, microsecond=0)
+        if datetime.now() < ma_scan_time:
+            # Monitor gap trades while waiting
+            while datetime.now() < ma_scan_time and self.positions:
+                self.monitor_positions()
+                time.sleep(30)
+            if datetime.now() < ma_scan_time:
+                time.sleep((ma_scan_time - datetime.now()).total_seconds())
+
+        ma_signals = self.scan_ma_convergence(6, 15)
+        for s in ma_signals:
+            self.enter_trade(s)
+
+        # Step 4: Monitor until 10:15 AM
         cam_scan_time = datetime.now().replace(hour=10, minute=15, second=0, microsecond=0)
         while datetime.now() < cam_scan_time and self.positions:
             self.monitor_positions()
-            time.sleep(30)  # Check every 30 sec for gap trades (fast target)
+            time.sleep(30)
 
-        # Step 4: CAM scan at 10:15 AM
-        log.info('--- CAM SCAN at 10:15 AM ---')
+        # Step 5: CAM + Pivot scan at 10:15 AM
+        log.info('--- CAM + PIVOT SCAN at 10:15 AM ---')
         cam_signals = self.scan_signals()
         for s in cam_signals[:config.MAX_TRADES]:
             self.enter_trade(s)
 
-        if not gap_signals and not cam_signals:
-            log.info('No signals from either strategy. Done for today.')
+        total_signals = len(gap_signals) + len(ma_signals) + len(cam_signals)
+        if total_signals == 0:
+            log.info('No signals from any strategy. Done for today.')
             self.write_journal()
             return
 
-        # Step 5: Monitor until 3:00 PM
+        # Step 6: Monitor until 3:00 PM
         close_time = datetime.now().replace(hour=15, minute=0, second=0)
         while datetime.now() < close_time and self.positions:
             self.monitor_positions()
             time.sleep(60)
 
-        # Step 6: Close remaining at EOD
+        # Step 7: Close remaining at EOD
         self.close_all()
 
         # Step 7: Journal
