@@ -170,10 +170,10 @@ class LiveTrader:
             if not entry_oid:
                 return False
 
-            # Place SL-M stop loss order (trigger price only, market exit)
+            # Place SL stop loss order
             sl_side = 'BUY' if direction == 'SHORT' else 'SELL'
             sl_oid = api.place_order(sym, qty, sl_side, 0,
-                                     order_type='SL-M', trigger_price=signal['stop'])
+                                     order_type='SL', trigger_price=signal['stop'])
 
             self.positions[sym] = {
                 'signal': signal, 'qty': qty, 'margin': margin,

@@ -105,8 +105,15 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='I', trigger
         order['price'] = round(price, 2)
         order['trigger_price'] = 0
     elif order_type == 'SL':
-        order['price'] = round(price, 2)
-        order['trigger_price'] = round(trigger_price, 2)
+        # SL needs both price and trigger. Price = slightly worse than trigger.
+        tp = round(trigger_price, 2)
+        # For SELL SL: price below trigger (slippage buffer)
+        # For BUY SL: price above trigger
+        if side == 'SELL':
+            order['price'] = round(tp * 0.995, 2)  # 0.5% below trigger
+        else:
+            order['price'] = round(tp * 1.005, 2)  # 0.5% above trigger
+        order['trigger_price'] = tp
     elif order_type == 'SL-M':
         order['price'] = 0
         order['trigger_price'] = round(trigger_price, 2)
@@ -208,23 +215,18 @@ def load_previous_days(sym, num_days=10):
     to_date = datetime.now().strftime('%Y-%m-%d')
     from_date = (datetime.now() - timedelta(days=num_days + 5)).strftime('%Y-%m-%d')
 
-    # API only supports 1minute and 30minute, not 5minute
-    # Fetch 1-minute and aggregate to 5-minute
-    candles = get_historical_candles(inst, '1minute', from_date, to_date)
-    if not candles:
-        # Fallback: try 30minute for daily trend (less precise but works)
-        candles = get_historical_candles(inst, '30minute', from_date, to_date)
-        if not candles: return []
-        bars = []
-        for c in sorted(candles, key=lambda x: x[0]):
-            bars.append({
-                'timestamp': c[0][:19],
-                'open': float(c[1]),
-                'high': float(c[2]),
-                'low': float(c[3]),
-                'close': float(c[4]),
-                'volume': int(c[5]),
-            })
-        return bars
-
-    return aggregate_1min_to_5min(candles)
+    # Use 30-minute bars for historical (no date range limit, no errors)
+    # Daily OHLCV is computed from these — sufficient for trends, MAs, levels
+    candles = get_historical_candles(inst, '30minute', from_date, to_date)
+    if not candles: return []
+    bars = []
+    for c in sorted(candles, key=lambda x: x[0]):
+        bars.append({
+            'timestamp': c[0][:19],
+            'open': float(c[1]),
+            'high': float(c[2]),
+            'low': float(c[3]),
+            'close': float(c[4]),
+            'volume': int(c[5]),
+        })
+    return bars
