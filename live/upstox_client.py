@@ -98,25 +98,26 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='I', trigger
         'is_amo': False,
     }
 
+    def tick_round(val):
+        """Round price to nearest tick size (0.05)."""
+        return round(round(val / 0.05) * 0.05, 2)
+
     if order_type == 'MARKET':
         order['price'] = 0
         order['trigger_price'] = 0
     elif order_type == 'LIMIT':
-        order['price'] = round(price, 2)
+        order['price'] = tick_round(price)
         order['trigger_price'] = 0
     elif order_type == 'SL':
-        # SL needs both price and trigger. Price = slightly worse than trigger.
-        tp = round(trigger_price, 2)
-        # For SELL SL: price below trigger (slippage buffer)
-        # For BUY SL: price above trigger
+        tp = tick_round(trigger_price)
         if side == 'SELL':
-            order['price'] = round(tp * 0.995, 2)  # 0.5% below trigger
+            order['price'] = tick_round(tp * 0.995)
         else:
-            order['price'] = round(tp * 1.005, 2)  # 0.5% above trigger
+            order['price'] = tick_round(tp * 1.005)
         order['trigger_price'] = tp
     elif order_type == 'SL-M':
         order['price'] = 0
-        order['trigger_price'] = round(trigger_price, 2)
+        order['trigger_price'] = tick_round(trigger_price)
 
     try:
         r = requests.post(f'{config.UPSTOX_BASE}/order/place',
