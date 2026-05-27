@@ -394,22 +394,20 @@ class LiveTrader:
 
         # Step 3: MA CONVERGENCE scan at 9:45 AM (bar 6-15)
         ma_scan_time = datetime.now().replace(hour=9, minute=45, second=0, microsecond=0)
-        if datetime.now() < ma_scan_time:
-            # Monitor gap trades while waiting
-            while datetime.now() < ma_scan_time and self.positions:
+        while datetime.now() < ma_scan_time:
+            if self.positions:
                 self.monitor_positions()
-                time.sleep(30)
-            if datetime.now() < ma_scan_time:
-                time.sleep((ma_scan_time - datetime.now()).total_seconds())
+            time.sleep(30)
 
         ma_signals = self.scan_ma_convergence(6, 15)
         for s in ma_signals:
             self.enter_trade(s)
 
-        # Step 4: Monitor until 10:15 AM
+        # Step 4: Wait until 10:15 AM (monitor any open positions)
         cam_scan_time = datetime.now().replace(hour=10, minute=15, second=0, microsecond=0)
-        while datetime.now() < cam_scan_time and self.positions:
-            self.monitor_positions()
+        while datetime.now() < cam_scan_time:
+            if self.positions:
+                self.monitor_positions()
             time.sleep(30)
 
         # Step 5: CAM + Pivot scan at 10:15 AM
