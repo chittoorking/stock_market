@@ -233,7 +233,8 @@ def check_gap_signal(sym, today_bars, prev_close):
       1. Gap 2%+ from prev close
       2. First bar reverses by 0.5%+
       3. SHORT gap-up, LONG gap-down
-      4. Target: 0.5%, Stop: 1.0%
+      4. Target: 0.5% (then runner with 0.25% step)
+      5. Stop: 1.0%
     Returns signal dict or None.
     """
     if not today_bars or not prev_close:
@@ -255,6 +256,7 @@ def check_gap_signal(sym, today_bars, prev_close):
             'entry': round(today_open, 2),
             'stop': round(today_open * (1 + 1.0/100), 2),
             'target': round(today_open * (1 - 0.5/100), 2),
+            'runner_step': 0.25,  # Trail with 0.25% step after target
             'level': round(prev_close, 2),
             'gap': round(gap, 2),
         }
@@ -266,6 +268,7 @@ def check_gap_signal(sym, today_bars, prev_close):
             'entry': round(today_open, 2),
             'stop': round(today_open * (1 - 1.0/100), 2),
             'target': round(today_open * (1 + 0.5/100), 2),
+            'runner_step': 0.25,  # Trail with 0.25% step after target
             'level': round(prev_close, 2),
             'gap': round(gap, 2),
         }
@@ -280,6 +283,10 @@ def check_exit(signal, current_price, mfe, trail_active, target_hit):
     entry = signal['entry']
     direction = signal['direction']
 
+    # Per-signal target and runner step (GAP uses 0.5%/0.25%, CAM uses 1.75%/0.25%)
+    sig_target = abs(signal['entry'] - signal['target']) / signal['entry'] * 100
+    sig_runner = signal.get('runner_step', config.RUNNER_STEP)
+
     if direction == 'SHORT':
         fav = (entry - current_price) / entry * 100
         adv = (current_price - entry) / entry * 100
@@ -288,16 +295,16 @@ def check_exit(signal, current_price, mfe, trail_active, target_hit):
         adv = (entry - current_price) / entry * 100
 
     new_mfe = max(mfe, fav)
-    new_trail = trail_active or new_mfe >= config.TRAIL_ACTIVATE
-    new_target_hit = target_hit or new_mfe >= config.TARGET
+    new_trail = trail_active or new_mfe >= min(sig_target, config.TRAIL_ACTIVATE)
+    new_target_hit = target_hit or new_mfe >= sig_target
 
     # Phase 3: Runner mode (after target hit)
     if new_target_hit:
-        runner_stop_pct = new_mfe - config.RUNNER_STEP
-        if runner_stop_pct > config.TARGET:
+        runner_stop_pct = new_mfe - sig_runner
+        if runner_stop_pct > sig_target:
             runner_stop_pct = runner_stop_pct
         else:
-            runner_stop_pct = config.TARGET
+            runner_stop_pct = sig_target
 
         if direction == 'SHORT':
             runner_stop_price = entry * (1 - runner_stop_pct / 100)
