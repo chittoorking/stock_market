@@ -380,28 +380,37 @@ class LiveTrader:
         # Step 1: Load historical data
         self.load_historical()
 
-        # Step 2: GAP FILL scan at 9:20 AM
+        # Step 2: GAP FILL scan at 9:20 AM (skip if past 9:25 — edge is gone)
         now = datetime.now()
         gap_scan_time = now.replace(hour=9, minute=20, second=0, microsecond=0)
+        gap_deadline = now.replace(hour=9, minute=25, second=0, microsecond=0)
         if now < gap_scan_time:
             wait = (gap_scan_time - now).total_seconds()
             log.info(f'Waiting {wait:.0f}s until 9:20 AM (gap scan)...')
             time.sleep(wait)
 
-        gap_signals = self.scan_gap_signals()
-        for s in gap_signals:
-            self.enter_trade(s)
+        if datetime.now() <= gap_deadline:
+            gap_signals = self.scan_gap_signals()
+            for s in gap_signals:
+                self.enter_trade(s)
+        else:
+            log.info(f'SKIPPED gap scan — past 9:25 AM, signals are stale')
 
-        # Step 3: MA CONVERGENCE scan at 9:45 AM (bar 6-15)
-        ma_scan_time = datetime.now().replace(hour=9, minute=45, second=0, microsecond=0)
+        # Step 3: MA CONVERGENCE scan at 9:45 AM (skip if past 10:00)
+        now = datetime.now()
+        ma_scan_time = now.replace(hour=9, minute=45, second=0, microsecond=0)
+        ma_deadline = now.replace(hour=10, minute=0, second=0, microsecond=0)
         while datetime.now() < ma_scan_time:
             if self.positions:
                 self.monitor_positions()
             time.sleep(30)
 
-        ma_signals = self.scan_ma_convergence(6, 15)
-        for s in ma_signals:
-            self.enter_trade(s)
+        if datetime.now() <= ma_deadline:
+            ma_signals = self.scan_ma_convergence(6, 15)
+            for s in ma_signals:
+                self.enter_trade(s)
+        else:
+            log.info(f'SKIPPED MA scan — past 10:00 AM, signals are stale')
 
         # Step 4: Wait until 10:15 AM (monitor any open positions)
         cam_scan_time = datetime.now().replace(hour=10, minute=15, second=0, microsecond=0)
