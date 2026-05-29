@@ -300,11 +300,7 @@ def check_exit(signal, current_price, mfe, trail_active, target_hit):
 
     # Phase 3: Runner mode (after target hit)
     if new_target_hit:
-        runner_stop_pct = new_mfe - sig_runner
-        if runner_stop_pct > sig_target:
-            runner_stop_pct = runner_stop_pct
-        else:
-            runner_stop_pct = sig_target
+        runner_stop_pct = max(new_mfe - sig_runner, sig_target)
 
         if direction == 'SHORT':
             runner_stop_price = entry * (1 - runner_stop_pct / 100)

@@ -175,6 +175,11 @@ class LiveTrader:
             sl_oid = api.place_order(sym, qty, sl_side, 0,
                                      order_type='SL-M', trigger_price=signal['stop'])
 
+            if not sl_oid:
+                log.error(f'SL order FAILED for {sym} — exiting position immediately')
+                api.place_order(sym, qty, 'BUY' if side == 'SELL' else 'SELL', 0, order_type='MARKET')
+                return False
+
             self.positions[sym] = {
                 'signal': signal, 'qty': qty, 'margin': margin,
                 'entry_order': entry_oid, 'stop_order': sl_oid,
@@ -245,12 +250,20 @@ class LiveTrader:
             log.info(f'[PAPER] EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
                      f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
         else:
-            # Cancel stop loss order first
-            if pos.get('stop_order') and pos['stop_order'] != 'PAPER':
-                api.cancel_order(pos['stop_order'])
-            # Place MARKET exit order (price=0 for market orders)
+            # Cancel stop loss order first (skip if synced/paper/None)
+            sl_oid = pos.get('stop_order')
+            if sl_oid and sl_oid not in ('PAPER', 'synced', None):
+                try:
+                    api.cancel_order(sl_oid)
+                except Exception as e:
+                    log.warning(f'SL cancel failed for {sym}: {e}')
+
+            # Place MARKET exit order
             side = 'BUY' if direction == 'SHORT' else 'SELL'
-            api.place_order(sym, qty, side, 0, order_type='MARKET')
+            exit_oid = api.place_order(sym, qty, side, 0, order_type='MARKET')
+            if not exit_oid:
+                log.error(f'EXIT ORDER FAILED for {sym} — position still open!')
+                return  # Don't delete from self.positions
             log.info(f'EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
                      f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
 
@@ -446,8 +459,11 @@ class LiveTrader:
         ma_scan_time = now.replace(hour=9, minute=45, second=0, microsecond=0)
         ma_deadline = now.replace(hour=10, minute=0, second=0, microsecond=0)
         while datetime.now() < ma_scan_time:
-            if self.positions:
-                self.monitor_positions()
+            try:
+                if self.positions:
+                    self.monitor_positions()
+            except Exception as e:
+                log.error(f'Monitor error (pre-MA): {e}')
             time.sleep(30)
 
         if datetime.now() <= ma_deadline:
@@ -460,8 +476,11 @@ class LiveTrader:
         # Step 4: Wait until 10:15 AM (monitor any open positions)
         cam_scan_time = datetime.now().replace(hour=10, minute=15, second=0, microsecond=0)
         while datetime.now() < cam_scan_time:
-            if self.positions:
-                self.monitor_positions()
+            try:
+                if self.positions:
+                    self.monitor_positions()
+            except Exception as e:
+                log.error(f'Monitor error (pre-CAM): {e}')
             time.sleep(30)
 
         # Step 5: CAM + Pivot scan at 10:15 AM
