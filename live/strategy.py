@@ -8,13 +8,13 @@ log = logging.getLogger('strategy')
 
 def compute_daily_trend(daily_closes):
     """Compute 5-day trend from list of daily closes.
-    Uses last 5 COMPLETED days (excludes today if included).
+    daily_closes is guaranteed to contain only completed days (today excluded by trader).
+    Uses last 5 entries — same as the proven backtest (dc[-5:]).
     Returns 'UP', 'DOWN', or 'SIDE'.
     """
-    if len(daily_closes) < 6:
+    if len(daily_closes) < 5:
         return 'SIDE'
-    # Use 5 days BEFORE the last entry (last entry might be today/incomplete)
-    last5 = daily_closes[-6:-1]
+    last5 = daily_closes[-5:]
     up = sum(1 for j in range(1, len(last5)) if last5[j] > last5[j - 1])
     if up >= 4: return 'UP'
     if up <= 1: return 'DOWN'

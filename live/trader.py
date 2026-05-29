@@ -83,11 +83,12 @@ class LiveTrader:
             if len(dates) < 2:
                 continue
 
-            # Daily closes for trend
-            self.daily_closes[sym] = [by_date[d][-1]['close'] for d in dates]
+            # Daily closes for trend — exclude today (incomplete)
+            completed_dates = [d for d in dates if d < self.today]
+            self.daily_closes[sym] = [by_date[d][-1]['close'] for d in completed_dates]
 
-            # Daily volumes for MA convergence
-            self.daily_volumes[sym] = [sum(b['volume'] for b in by_date[d]) for d in dates]
+            # Daily volumes for MA convergence — exclude today
+            self.daily_volumes[sym] = [sum(b['volume'] for b in by_date[d]) for d in completed_dates]
 
             # Previous day bars
             prev_date = dates[-1] if dates[-1] < self.today else dates[-2] if len(dates) > 1 else None
