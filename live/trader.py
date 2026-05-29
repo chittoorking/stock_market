@@ -396,7 +396,11 @@ class LiveTrader:
                 if qty == 0 or sym not in config.INSTRUMENTS:
                     continue
                 direction = 'SHORT' if qty < 0 else 'LONG'
-                entry = abs(p.get('average_price', 0))
+                # average_price is often 0 from Upstox — use sell_price for SHORT, buy_price for LONG
+                if direction == 'SHORT':
+                    entry = abs(p.get('sell_price', 0) or p.get('average_price', 0))
+                else:
+                    entry = abs(p.get('buy_price', 0) or p.get('average_price', 0))
                 if entry == 0:
                     entry = p.get('last_price', 0)
                 # Build a minimal signal for monitoring
