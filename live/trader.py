@@ -367,6 +367,42 @@ class LiveTrader:
         log.info(f'Found {len(signals)} MA convergence signals')
         return signals
 
+    def _sync_existing_positions(self):
+        """Check Upstox for open positions on startup. Populate self.positions so we monitor them."""
+        if self.paper_mode:
+            return
+        try:
+            positions = api.get_positions()
+            if not positions:
+                return
+            for p in positions:
+                qty = p.get('quantity', 0)
+                sym_raw = p.get('trading_symbol', '')
+                sym = sym_raw.replace('-EQ', '')
+                if qty == 0 or sym not in config.INSTRUMENTS:
+                    continue
+                direction = 'SHORT' if qty < 0 else 'LONG'
+                entry = abs(p.get('average_price', 0))
+                if entry == 0:
+                    entry = p.get('last_price', 0)
+                # Build a minimal signal for monitoring
+                if direction == 'SHORT':
+                    stop = entry * (1 + 1.5 / 100)
+                    target = entry * (1 - 1.75 / 100)
+                else:
+                    stop = entry * (1 - 1.5 / 100)
+                    target = entry * (1 + 1.75 / 100)
+                self.positions[sym] = {
+                    'signal': {'sym': sym, 'direction': direction, 'entry': entry,
+                               'stop': stop, 'target': target},
+                    'qty': abs(qty), 'margin': abs(qty) * entry / config.LEVERAGE,
+                    'entry_order': 'synced', 'stop_order': 'synced',
+                    'mfe': 0, 'trail_active': False, 'target_hit': False,
+                }
+                log.info(f'SYNCED existing position: {direction} {abs(qty)} {sym} @ {entry:.2f}')
+        except Exception as e:
+            log.error(f'Position sync error: {e}')
+
     def run(self):
         """Main trading loop."""
         mode = 'PAPER' if self.paper_mode else 'LIVE'
@@ -376,6 +412,13 @@ class LiveTrader:
         log.info(f'Strategy 2: MA CONVERGENCE (91% WR) at 9:45 AM')
         log.info(f'Strategy 3: CAM R3/S3 + Pivot (89-96% WR) at 10:15 AM')
         log.info('=' * 60)
+
+        # Step 0: Check for existing positions (crash recovery)
+        self._sync_existing_positions()
+        if self.positions:
+            log.info(f'Found {len(self.positions)} existing positions — skipping signal scans, going to monitor')
+            self._monitor_until_close()
+            return
 
         # Step 1: Load historical data
         self.load_historical()
@@ -428,21 +471,35 @@ class LiveTrader:
             self.enter_trade(s)
 
         total_signals = len(gap_signals) + len(ma_signals) + len(cam_signals)
-        if total_signals == 0:
+        if total_signals == 0 and not self.positions:
             log.info('No signals from any strategy. Done for today.')
             self.write_journal()
             return
 
-        # Step 6: Monitor until 3:00 PM
+        # Step 6: Monitor until close
+        self._monitor_until_close()
+
+    def _monitor_until_close(self):
+        """Monitor positions until 3 PM, then close all. Never crashes."""
         close_time = datetime.now().replace(hour=15, minute=0, second=0)
-        while datetime.now() < close_time and self.positions:
-            self.monitor_positions()
+        log.info(f'Monitoring {len(self.positions)} positions until 3:00 PM...')
+        while datetime.now() < close_time:
+            try:
+                if self.positions:
+                    self.monitor_positions()
+                    log.info(f'  [{datetime.now().strftime("%H:%M")}] {len(self.positions)} open | '
+                             f'Daily PnL: Rs {self.daily_pnl:+,.0f}')
+                else:
+                    log.info(f'  [{datetime.now().strftime("%H:%M")}] All positions closed')
+                    break
+            except Exception as e:
+                log.error(f'Monitor error (continuing): {e}')
             time.sleep(60)
 
-        # Step 7: Close remaining at EOD
-        self.close_all()
+        # Close remaining at EOD
+        if self.positions:
+            self.close_all()
 
-        # Step 7: Journal
         log.info(f'\nDAILY RESULT: Rs {self.daily_pnl:+,.0f}')
         log.info(f'Capital: Rs {self.capital:,} -> Rs {self.available:,.0f}')
         self.write_journal()
