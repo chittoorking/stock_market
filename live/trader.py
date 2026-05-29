@@ -381,6 +381,7 @@ class LiveTrader:
         self.load_historical()
 
         # Step 2: GAP FILL scan at 9:20 AM (skip if past 9:25 — edge is gone)
+        gap_signals = []
         now = datetime.now()
         gap_scan_time = now.replace(hour=9, minute=20, second=0, microsecond=0)
         gap_deadline = now.replace(hour=9, minute=25, second=0, microsecond=0)
@@ -397,6 +398,7 @@ class LiveTrader:
             log.info(f'SKIPPED gap scan — past 9:25 AM, signals are stale')
 
         # Step 3: MA CONVERGENCE scan at 9:45 AM (skip if past 10:00)
+        ma_signals = []
         now = datetime.now()
         ma_scan_time = now.replace(hour=9, minute=45, second=0, microsecond=0)
         ma_deadline = now.replace(hour=10, minute=0, second=0, microsecond=0)
