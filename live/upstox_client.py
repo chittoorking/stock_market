@@ -98,9 +98,13 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='I', trigger
         'is_amo': False,
     }
 
-    def tick_round(val):
-        """Round price to nearest tick size (0.05)."""
-        return round(round(val / 0.05) * 0.05, 2)
+    def tick_round(val, tick=0.05):
+        """Round price to nearest tick size."""
+        return round(round(val / tick) * tick, 2)
+
+    def sl_round(val):
+        """Round to 0.50 for SL orders — Upstox rejects 0.05 ticks on SL."""
+        return round(round(val / 0.50) * 0.50, 2)
 
     if order_type == 'MARKET':
         order['price'] = 0
@@ -109,15 +113,15 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='I', trigger
         order['price'] = tick_round(price)
         order['trigger_price'] = 0
     elif order_type == 'SL':
-        tp = tick_round(trigger_price)
+        tp = sl_round(trigger_price)
         if side == 'SELL':
-            order['price'] = tick_round(tp * 0.995)
+            order['price'] = sl_round(tp * 0.995)
         else:
-            order['price'] = tick_round(tp * 1.005)
+            order['price'] = sl_round(tp * 1.005)
         order['trigger_price'] = tp
     elif order_type == 'SL-M':
         order['price'] = 0
-        order['trigger_price'] = tick_round(trigger_price)
+        order['trigger_price'] = sl_round(trigger_price)
 
     try:
         r = requests.post(f'{config.UPSTOX_BASE}/order/place',
