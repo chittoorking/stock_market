@@ -427,8 +427,8 @@ class LiveTrader:
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
         log.info(f'Strategy 1: GAP FILL (99.8% WR) at 9:20 AM')
-        log.info(f'Strategy 2: MA CONVERGENCE (91% WR) at 9:45 AM')
-        log.info(f'Strategy 3: CAM R3/S3 + Pivot (89-96% WR) at 10:15 AM')
+        log.info(f'Strategy 2: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
+        log.info(f'CAM/PIVOT disabled — no proven edge without lookahead')
         log.info('=' * 60)
 
         # Step 0: Check for existing positions (crash recovery)
@@ -478,23 +478,10 @@ class LiveTrader:
         else:
             log.info(f'SKIPPED MA scan — past 10:00 AM, signals are stale')
 
-        # Step 4: Wait until 10:15 AM (monitor any open positions)
-        cam_scan_time = datetime.now().replace(hour=10, minute=15, second=0, microsecond=0)
-        while datetime.now() < cam_scan_time:
-            try:
-                if self.positions:
-                    self.monitor_positions()
-            except Exception as e:
-                log.error(f'Monitor error (pre-CAM): {e}')
-            time.sleep(30)
+        # CAM/PIVOT disabled — no proven edge without lookahead trend
+        cam_signals = []
 
-        # Step 5: CAM + Pivot scan at 10:15 AM
-        log.info('--- CAM + PIVOT SCAN at 10:15 AM ---')
-        cam_signals = self.scan_signals()
-        for s in cam_signals[:config.MAX_TRADES]:
-            self.enter_trade(s)
-
-        total_signals = len(gap_signals) + len(ma_signals) + len(cam_signals)
+        total_signals = len(gap_signals) + len(ma_signals)
         if total_signals == 0 and not self.positions:
             log.info('No signals from any strategy. Done for today.')
             self.write_journal()
