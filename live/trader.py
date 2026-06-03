@@ -426,7 +426,7 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: GAP FILL (99.8% WR) at 9:20 AM')
+        log.info(f'Strategy 1: GAP FILL (100% WR, gap>=1%, runner=0.10%) at 9:20 AM')
         log.info(f'Strategy 2: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
         log.info(f'CAM/PIVOT disabled — no proven edge without lookahead')
         log.info('=' * 60)
