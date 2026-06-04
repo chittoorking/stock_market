@@ -426,7 +426,7 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: GAP FILL (100% WR, gap>=1%, runner=0.10%) at 9:20 AM')
+        log.info(f'Strategy 1: GAP FILL (100% WR, gap>=1%, runner=0.10%) at 9:15 AM')
         log.info(f'Strategy 2: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
         log.info(f'CAM/PIVOT disabled — no proven edge without lookahead')
         log.info('=' * 60)
@@ -441,22 +441,43 @@ class LiveTrader:
         # Step 1: Load historical data
         self.load_historical()
 
-        # Step 2: GAP FILL scan at 9:20 AM (skip if past 9:25 — edge is gone)
+        # Step 2: GAP FILL scan at 9:15 AM (enter immediately at open, not 9:20)
+        # The gap fills in the first 1-5 minutes — waiting till 9:20 misses the move
         gap_signals = []
         now = datetime.now()
-        gap_scan_time = now.replace(hour=9, minute=20, second=0, microsecond=0)
-        gap_deadline = now.replace(hour=9, minute=25, second=0, microsecond=0)
+        gap_scan_time = now.replace(hour=9, minute=15, second=30, microsecond=0)
+        gap_deadline = now.replace(hour=9, minute=18, second=0, microsecond=0)
         if now < gap_scan_time:
             wait = (gap_scan_time - now).total_seconds()
-            log.info(f'Waiting {wait:.0f}s until 9:20 AM (gap scan)...')
+            log.info(f'Waiting {wait:.0f}s until 9:15:30 AM (gap scan)...')
             time.sleep(wait)
 
         if datetime.now() <= gap_deadline:
             gap_signals = self.scan_gap_signals()
             for s in gap_signals:
+                # Check if gap already filled before entering
+                inst = config.INSTRUMENTS.get(s['sym'])
+                ltp_data = api.get_ltp([inst])
+                ltp = None
+                for key, val in ltp_data.items():
+                    if 'last_price' in val:
+                        ltp = val['last_price']
+                        break
+                if ltp:
+                    if s['direction'] == 'SHORT' and ltp <= s['target']:
+                        log.info(f'SKIP {s["sym"]} — gap already filled (ltp={ltp:.2f} <= target={s["target"]})')
+                        continue
+                    if s['direction'] == 'LONG' and ltp >= s['target']:
+                        log.info(f'SKIP {s["sym"]} — gap already filled (ltp={ltp:.2f} >= target={s["target"]})')
+                        continue
+                    # Check if price moved too far past entry (slippage guard)
+                    slippage = abs(ltp - s['entry']) / s['entry'] * 100
+                    if slippage > 0.5:
+                        log.info(f'SKIP {s["sym"]} — too much slippage ({slippage:.2f}% from entry {s["entry"]})')
+                        continue
                 self.enter_trade(s)
         else:
-            log.info(f'SKIPPED gap scan — past 9:25 AM, signals are stale')
+            log.info(f'SKIPPED gap scan — past 9:18 AM, signals are stale')
 
         # Step 3: MA CONVERGENCE scan at 9:45 AM (skip if past 10:00)
         ma_signals = []
