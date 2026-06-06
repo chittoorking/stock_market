@@ -304,34 +304,36 @@ class LiveTrader:
         log.info(f'Journal: {jf}')
 
     def scan_gap_signals(self):
-        """Scan for gap fill signals at 9:20 AM (after first bar)."""
-        log.info('Scanning for GAP FILL signals...')
+        """Scan for gap/range fill signals at 9:15 AM (after first bar)."""
+        log.info('Scanning for GAP/RANGE FILL signals...')
         signals = []
 
         for sym in config.INSTRUMENTS:
-            if sym in self.positions:  # Skip if already in a trade
+            if sym in self.positions:
                 continue
             if sym not in self.daily_closes:
                 continue
 
-            # Get prev close
             closes = self.daily_closes[sym]
             if len(closes) < 2:
                 continue
-            prev_close = closes[-1]  # Last completed day's close
+            prev_close = closes[-1]
 
-            # Get today's first bar
+            # Get prev high/low from prev_stats
+            prev_stats = self.prev_stats.get(sym)
+            prev_high = prev_stats['high'] if prev_stats else None
+            prev_low = prev_stats['low'] if prev_stats else None
+
             inst = config.INSTRUMENTS[sym]
             candles = api.get_intraday_candles(inst, '1minute')
             if not candles:
                 continue
 
-            # Aggregate to 5-min (need at least 1 bar)
             bars_5min = api.aggregate_1min_to_5min(candles)
             if not bars_5min:
                 continue
 
-            signal = strategy.check_gap_signal(sym, bars_5min, prev_close)
+            signal = strategy.check_gap_signal(sym, bars_5min, prev_close, prev_high, prev_low)
             if signal:
                 signals.append(signal)
                 log.info(f'GAP SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}% '
@@ -426,7 +428,7 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: GAP FILL (100% WR, gap>=1%, runner=0.10%) at 9:15 AM')
+        log.info(f'Strategy 1: RANGE FILL (98% WR, gap/range break + fb reversal) at 9:15 AM')
         log.info(f'Strategy 2: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
         log.info(f'CAM/PIVOT disabled — no proven edge without lookahead')
         log.info('=' * 60)
