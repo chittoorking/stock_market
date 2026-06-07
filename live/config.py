@@ -15,8 +15,8 @@ MIN_YD_BODY = 0.2
 
 # ═══ TRADING PARAMS ═══
 CAPITAL = int(os.getenv('CAPITAL', '0'))  # 0 = auto-fetch from Upstox
-SIZING = 0.20  # 20% of available capital per trade
-MAX_TRADES = 45
+SIZING = 0.50  # 50% per trade (top 2 signals) or 100% if only 1 signal
+MAX_TRADES = 2  # Take only top 2 ranked by gap size
 LEVERAGE = 5  # Broker intraday leverage
 
 # ═══ UPSTOX API ═══

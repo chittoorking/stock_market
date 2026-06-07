@@ -460,7 +460,21 @@ class LiveTrader:
 
         if datetime.now() <= gap_deadline:
             gap_signals = self.scan_gap_signals()
-            for s in gap_signals:
+
+            # Rank by gap size (biggest gap = most profit per trade)
+            gap_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
+            log.info(f'Ranked {len(gap_signals)} signals by gap size')
+
+            # Take top MAX_TRADES (default 2), adjust sizing
+            top_signals = gap_signals[:config.MAX_TRADES]
+            if len(top_signals) == 1:
+                # Only 1 signal: use 100% capital
+                self.available = float(self.capital)
+                log.info(f'1 signal — using 100% capital')
+            elif len(top_signals) >= 2:
+                log.info(f'{len(top_signals)} signals — using {config.SIZING*100:.0f}% each')
+
+            for s in top_signals:
                 # Check if gap already filled before entering
                 inst = config.INSTRUMENTS.get(s['sym'])
                 ltp_data = api.get_ltp([inst])
@@ -476,7 +490,6 @@ class LiveTrader:
                     if s['direction'] == 'LONG' and ltp >= s['target']:
                         log.info(f'SKIP {s["sym"]} — gap already filled (ltp={ltp:.2f} >= target={s["target"]})')
                         continue
-                    # Check if price moved too far past entry (slippage guard)
                     slippage = abs(ltp - s['entry']) / s['entry'] * 100
                     if slippage > 0.5:
                         log.info(f'SKIP {s["sym"]} — too much slippage ({slippage:.2f}% from entry {s["entry"]})')
