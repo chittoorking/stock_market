@@ -329,14 +329,18 @@ class LiveTrader:
             if not candles:
                 continue
 
-            bars_5min = api.aggregate_1min_to_5min(candles)
-            if not bars_5min:
+            # Use raw 1-min bars — don't aggregate to 5-min
+            # Gap fills in 1-3 minutes, 5-min aggregation wastes time
+            sorted_candles = sorted(candles, key=lambda x: x[0])
+            if not sorted_candles:
                 continue
+            bars_1min = [{'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]),
+                          'close': float(c[4]), 'volume': int(c[5])} for c in sorted_candles]
 
-            signal = strategy.check_gap_signal(sym, bars_5min, prev_close, prev_high, prev_low)
+            signal = strategy.check_gap_signal(sym, bars_1min, prev_close, prev_high, prev_low)
             if signal:
                 signals.append(signal)
-                log.info(f'GAP SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}% '
+                log.info(f'RANGE SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}% '
                          f'entry={signal["entry"]} target={signal["target"]}')
 
             time.sleep(0.35)
@@ -443,15 +447,15 @@ class LiveTrader:
         # Step 1: Load historical data
         self.load_historical()
 
-        # Step 2: GAP FILL scan at 9:15 AM (enter immediately at open, not 9:20)
-        # The gap fills in the first 1-5 minutes — waiting till 9:20 misses the move
+        # Step 2: RANGE FILL scan at 9:16 AM (after first 1-min bar closes)
+        # Uses 1-min bars — gap fills in 1-3 min, can't wait for 5-min bar
         gap_signals = []
         now = datetime.now()
-        gap_scan_time = now.replace(hour=9, minute=15, second=30, microsecond=0)
+        gap_scan_time = now.replace(hour=9, minute=16, second=5, microsecond=0)
         gap_deadline = now.replace(hour=9, minute=18, second=0, microsecond=0)
         if now < gap_scan_time:
             wait = (gap_scan_time - now).total_seconds()
-            log.info(f'Waiting {wait:.0f}s until 9:15:30 AM (gap scan)...')
+            log.info(f'Waiting {wait:.0f}s until 9:16 AM (1-min bar scan)...')
             time.sleep(wait)
 
         if datetime.now() <= gap_deadline:
