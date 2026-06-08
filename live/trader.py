@@ -465,17 +465,10 @@ class LiveTrader:
             gap_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
             log.info(f'Ranked {len(gap_signals)} signals by gap size')
 
-            # Take top MAX_TRADES (default 2), adjust sizing
+            # Filter signals first (check slippage + gap filled), then size
             top_signals = gap_signals[:config.MAX_TRADES]
-            if len(top_signals) == 1:
-                # Only 1 signal: use 100% capital
-                self.available = float(self.capital)
-                log.info(f'1 signal — using 100% capital')
-            elif len(top_signals) >= 2:
-                log.info(f'{len(top_signals)} signals — using {config.SIZING*100:.0f}% each')
-
+            valid_signals = []
             for s in top_signals:
-                # Check if gap already filled before entering
                 inst = config.INSTRUMENTS.get(s['sym'])
                 ltp_data = api.get_ltp([inst])
                 ltp = None
@@ -494,6 +487,16 @@ class LiveTrader:
                     if slippage > 0.5:
                         log.info(f'SKIP {s["sym"]} — too much slippage ({slippage:.2f}% from entry {s["entry"]})')
                         continue
+                valid_signals.append(s)
+
+            # Size AFTER filtering — use 100% capital on 1 signal
+            if len(valid_signals) == 1:
+                self.available = float(self.capital)
+                log.info(f'1 valid signal — using 100% capital')
+            elif len(valid_signals) >= 2:
+                log.info(f'{len(valid_signals)} valid signals — using {config.SIZING*100:.0f}% each')
+
+            for s in valid_signals:
                 self.enter_trade(s)
         else:
             log.info(f'SKIPPED gap scan — past 9:18 AM, signals are stale')
