@@ -547,10 +547,9 @@ class LiveTrader:
             gap_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
             log.info(f'Ranked {len(gap_signals)} signals by gap size')
 
-            # Filter signals first (check slippage + gap filled), then size
-            top_signals = gap_signals[:config.MAX_TRADES]
+            # Filter ALL signals (not just top 2), then take top 2 valid ones
             valid_signals = []
-            for s in top_signals:
+            for s in gap_signals:
                 inst = config.INSTRUMENTS.get(s['sym'])
                 ltp_data = api.get_ltp([inst])
                 ltp = None
@@ -570,6 +569,8 @@ class LiveTrader:
                         log.info(f'SKIP {s["sym"]} — too much slippage ({slippage:.2f}% from entry {s["entry"]})')
                         continue
                 valid_signals.append(s)
+                if len(valid_signals) >= config.MAX_TRADES:
+                    break  # Got enough valid signals
 
             # Size AFTER filtering — use 100% capital on 1 signal
             if len(valid_signals) == 1:
