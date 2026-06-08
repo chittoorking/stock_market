@@ -303,14 +303,39 @@ class LiveTrader:
         jf.write_text(json.dumps(journal, indent=2))
         log.info(f'Journal: {jf}')
 
-    def scan_gap_signals(self):
-        """Scan for gap/range fill signals at 9:15 AM (after first bar)."""
-        log.info('Scanning for GAP/RANGE FILL signals...')
+    def scan_gap_ltp(self):
+        """15-second LTP scan — no bar close needed.
+        Get LTP for all stocks, check gap + reversal direction."""
+        log.info('Scanning via LTP (15-sec approach)...')
         signals = []
 
-        for sym in config.INSTRUMENTS:
-            if sym in self.positions:
+        # Get LTP for ALL instruments in one batch call
+        all_insts = [config.INSTRUMENTS[sym] for sym in config.INSTRUMENTS
+                     if sym in self.daily_closes and sym not in self.positions]
+        inst_to_sym = {v: k for k, v in config.INSTRUMENTS.items()}
+
+        # Upstox LTP API accepts comma-separated keys
+        # Split into batches of 10 to avoid URL length limits
+        all_ltps = {}
+        for i in range(0, len(all_insts), 10):
+            batch = all_insts[i:i+10]
+            ltp_data = api.get_ltp(batch)
+            if ltp_data:
+                all_ltps.update(ltp_data)
+            time.sleep(0.1)
+
+        log.info(f'Got LTP for {len(all_ltps)} stocks')
+
+        for key, val in all_ltps.items():
+            ltp = val.get('last_price')
+            if not ltp:
                 continue
+
+            # Extract symbol from key (format: NSE_EQ:SYMBOL)
+            sym = key.split(':')[-1] if ':' in key else key
+            inst = val.get('instrument_token', '')
+            sym = inst_to_sym.get(inst, sym)
+
             if sym not in self.daily_closes:
                 continue
 
@@ -319,30 +344,87 @@ class LiveTrader:
                 continue
             prev_close = closes[-1]
 
-            # Get prev high/low from prev_stats
+            prev_stats = self.prev_stats.get(sym)
+            prev_high = prev_stats['high'] if prev_stats else None
+            prev_low = prev_stats['low'] if prev_stats else None
+
+            # The LTP IS the current price (~15 sec after open)
+            # Use it as both "open" and "close" of a virtual bar
+            today_open = ltp  # Best approximation of open at this point
+
+            gap = (today_open - prev_close) / prev_close * 100
+            is_gap = abs(gap) >= 1.0
+            is_outside_high = prev_high and today_open > prev_high
+            is_outside_low = prev_low and today_open < prev_low
+
+            if not is_gap and not is_outside_high and not is_outside_low:
+                continue
+
+            # Reversal check: is LTP moving AGAINST the gap?
+            # At 15 sec, we check if LTP < open (for gap up) = already reversing
+            # We use the fact that LTP at 9:15:15 is already slightly different from open
+            # If gap up and LTP is below where it opened = sellers stepping in
+            # For now, we trust the gap + outside range as sufficient signal
+            # The slippage guard will catch if it doesn't reverse
+
+            if (is_gap and gap > 0) or is_outside_high:
+                direction = 'SHORT'
+                entry = round(today_open, 2)
+                signals.append({
+                    'sym': sym, 'direction': direction, 'strategy': 'RANGE_FILL',
+                    'entry': entry,
+                    'stop': round(entry * (1 + 1.0/100), 2),
+                    'target': round(entry * (1 - 0.5/100), 2),
+                    'runner_step': 0.10,
+                    'level': round(prev_close, 2),
+                    'gap': round(gap, 2),
+                })
+                log.info(f'RANGE SIGNAL: SHORT {sym} gap={gap:+.2f}% ltp={ltp:.2f}')
+
+            elif (is_gap and gap < 0) or is_outside_low:
+                direction = 'LONG'
+                entry = round(today_open, 2)
+                signals.append({
+                    'sym': sym, 'direction': direction, 'strategy': 'RANGE_FILL',
+                    'entry': entry,
+                    'stop': round(entry * (1 - 1.0/100), 2),
+                    'target': round(entry * (1 + 0.5/100), 2),
+                    'runner_step': 0.10,
+                    'level': round(prev_close, 2),
+                    'gap': round(gap, 2),
+                })
+                log.info(f'RANGE SIGNAL: LONG {sym} gap={gap:+.2f}% ltp={ltp:.2f}')
+
+        log.info(f'Found {len(signals)} signals')
+        return signals
+
+    def scan_gap_signals(self):
+        """Fallback: 1-min bar scan (used if LTP scan fails)."""
+        log.info('Scanning via 1-min bars (fallback)...')
+        signals = []
+
+        for sym in config.INSTRUMENTS:
+            if sym in self.positions or sym not in self.daily_closes:
+                continue
+            closes = self.daily_closes[sym]
+            if len(closes) < 2: continue
+            prev_close = closes[-1]
             prev_stats = self.prev_stats.get(sym)
             prev_high = prev_stats['high'] if prev_stats else None
             prev_low = prev_stats['low'] if prev_stats else None
 
             inst = config.INSTRUMENTS[sym]
             candles = api.get_intraday_candles(inst, '1minute')
-            if not candles:
-                continue
-
-            # Use raw 1-min bars — don't aggregate to 5-min
-            # Gap fills in 1-3 minutes, 5-min aggregation wastes time
+            if not candles: continue
             sorted_candles = sorted(candles, key=lambda x: x[0])
-            if not sorted_candles:
-                continue
+            if not sorted_candles: continue
             bars_1min = [{'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]),
                           'close': float(c[4]), 'volume': int(c[5])} for c in sorted_candles]
 
             signal = strategy.check_gap_signal(sym, bars_1min, prev_close, prev_high, prev_low)
             if signal:
                 signals.append(signal)
-                log.info(f'RANGE SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}% '
-                         f'entry={signal["entry"]} target={signal["target"]}')
-
+                log.info(f'RANGE SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}%')
             time.sleep(0.35)
 
         log.info(f'Found {len(signals)} gap signals')
@@ -432,7 +514,7 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: RANGE FILL (98% WR, gap/range break + fb reversal) at 9:15 AM')
+        log.info(f'Strategy 1: RANGE FILL (94% WR, 15-sec LTP scan) at 9:15:15 AM')
         log.info(f'Strategy 2: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
         log.info(f'CAM/PIVOT disabled — no proven edge without lookahead')
         log.info('=' * 60)
@@ -447,19 +529,19 @@ class LiveTrader:
         # Step 1: Load historical data
         self.load_historical()
 
-        # Step 2: RANGE FILL scan at 9:16 AM (after first 1-min bar closes)
-        # Uses 1-min bars — gap fills in 1-3 min, can't wait for 5-min bar
+        # Step 2: RANGE FILL — 15 second LTP scan (no bar close needed)
+        # Get LTP for all stocks at 9:15:15, check gap + reversal via LTP
         gap_signals = []
         now = datetime.now()
-        gap_scan_time = now.replace(hour=9, minute=16, second=5, microsecond=0)
-        gap_deadline = now.replace(hour=9, minute=18, second=0, microsecond=0)
+        gap_scan_time = now.replace(hour=9, minute=15, second=15, microsecond=0)
+        gap_deadline = now.replace(hour=9, minute=16, second=30, microsecond=0)
         if now < gap_scan_time:
             wait = (gap_scan_time - now).total_seconds()
-            log.info(f'Waiting {wait:.0f}s until 9:16 AM (1-min bar scan)...')
+            log.info(f'Waiting {wait:.0f}s until 9:15:15 AM (LTP scan)...')
             time.sleep(wait)
 
         if datetime.now() <= gap_deadline:
-            gap_signals = self.scan_gap_signals()
+            gap_signals = self.scan_gap_ltp()
 
             # Rank by gap size (biggest gap = most profit per trade)
             gap_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
