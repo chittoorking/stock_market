@@ -515,8 +515,8 @@ class LiveTrader:
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
         log.info(f'Strategy 1: RANGE FILL (98% WR) at 9:16 AM')
-        log.info(f'Strategy 2: LUNCH GAP FILL (98.6% WR) at 1:16 PM')
-        log.info(f'Strategy 3: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
+        log.info(f'Strategy 2: ALL-DAY CHAIN (98% WR) every 15 min 9:45-2:30')
+        log.info(f'Capital works all day — 5.8 trades/day avg')
         log.info('=' * 60)
 
         # Step 0: Check for existing positions (crash recovery)
@@ -603,75 +603,102 @@ class LiveTrader:
         else:
             log.info(f'SKIPPED MA scan — past 10:00 AM, signals are stale')
 
-        # Step 4: Monitor until 1:15 PM, then scan lunch gaps
-        lunch_scan_time = datetime.now().replace(hour=13, minute=16, second=0)
-        log.info(f'Monitoring until 1:16 PM (lunch gap scan)...')
-        while datetime.now() < lunch_scan_time:
-            try:
-                if self.positions:
-                    self.monitor_positions()
-                    log.info(f'  [{datetime.now().strftime("%H:%M")}] {len(self.positions)} open | '
-                             f'Daily PnL: Rs {self.daily_pnl:+,.0f}')
-                elif datetime.now().hour < 13:
-                    # No positions, wait quietly
-                    pass
-            except Exception as e:
-                log.error(f'Monitor error (pre-lunch): {e}')
-            time.sleep(60)
+        # Step 4: ALL-DAY CHAIN — scan mini gaps every 15 min from 9:45 to 2:30
+        # Same capital chains from trade to trade (each exits in ~5 min)
+        log.info('Starting ALL-DAY CHAIN — mini gap scans every 15 min...')
+        chain_trades = 0
 
-        # Step 5: LUNCH GAP FILL scan at 1:16 PM
-        log.info('--- LUNCH GAP FILL scan at 1:16 PM ---')
-        lunch_signals = []
-        for sym in config.INSTRUMENTS:
-            if sym in self.positions:
-                continue
-            inst = config.INSTRUMENTS[sym]
-            candles = api.get_intraday_candles(inst, '1minute')
-            if not candles:
-                continue
-            bars_5min = api.aggregate_1min_to_5min(candles)
-            if not bars_5min or len(bars_5min) < 50:
-                continue
-            signal = strategy.check_lunch_gap(sym, bars_5min)
-            if signal:
-                lunch_signals.append(signal)
-                log.info(f'LUNCH SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}%')
-            time.sleep(0.2)
+        # Scan windows: every 15 min (3 bars) from bar 6 (9:45) to bar 57 (2:30)
+        scan_bars = list(range(9, 60, 3))  # Reopen bars: 9,12,15,...,57
 
-        if lunch_signals:
-            lunch_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
-            # Filter for slippage + gap filled
-            valid_lunch = []
-            for s in lunch_signals[:config.MAX_TRADES]:
-                inst = config.INSTRUMENTS.get(s['sym'])
-                ltp_data = api.get_ltp([inst])
-                ltp = None
-                for key, val in ltp_data.items():
-                    if 'last_price' in val:
-                        ltp = val['last_price']
-                        break
-                if ltp:
-                    if s['direction'] == 'SHORT' and ltp <= s['target']:
-                        log.info(f'SKIP {s["sym"]} — lunch gap already filled')
+        for reopen_bar in scan_bars:
+            # Calculate scan time for this window
+            bar_minutes = 15 + reopen_bar * 5  # Minutes from 9:00
+            scan_hour = 9 + bar_minutes // 60
+            scan_minute = bar_minutes % 60
+            scan_time = datetime.now().replace(hour=scan_hour, minute=scan_minute, second=5)
+
+            # Wait until scan time
+            now = datetime.now()
+            if now > scan_time:
+                continue  # Already past this window
+            if now < scan_time:
+                # Monitor existing positions while waiting
+                while datetime.now() < scan_time:
+                    try:
+                        if self.positions:
+                            self.monitor_positions()
+                    except Exception as e:
+                        log.error(f'Monitor error (chain): {e}')
+                    time.sleep(30)
+
+            # Skip if we still have open positions (capital not free)
+            if self.positions:
+                continue
+
+            # Scan for mini gap signals
+            gap_bar = reopen_bar - 3
+            signals = []
+            for sym in config.INSTRUMENTS:
+                if sym in self.positions:
+                    continue
+                try:
+                    inst = config.INSTRUMENTS[sym]
+                    candles = api.get_intraday_candles(inst, '1minute')
+                    if not candles:
                         continue
-                    if s['direction'] == 'LONG' and ltp >= s['target']:
-                        log.info(f'SKIP {s["sym"]} — lunch gap already filled')
+                    bars_5min = api.aggregate_1min_to_5min(candles)
+                    if not bars_5min or len(bars_5min) <= reopen_bar:
                         continue
-                valid_lunch.append(s)
 
-            if len(valid_lunch) == 1:
+                    signal = strategy.check_lunch_gap(sym, bars_5min, gap_bar, reopen_bar)
+                    if signal:
+                        signals.append(signal)
+                except Exception:
+                    continue
+                time.sleep(0.15)
+
+            if not signals:
+                continue
+
+            # Rank by gap size, filter, enter
+            signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
+            valid = []
+            for s in signals[:config.MAX_TRADES]:
+                try:
+                    inst = config.INSTRUMENTS.get(s['sym'])
+                    ltp_data = api.get_ltp([inst])
+                    ltp = None
+                    for key, val in ltp_data.items():
+                        if 'last_price' in val:
+                            ltp = val['last_price']
+                            break
+                    if ltp:
+                        if s['direction'] == 'SHORT' and ltp <= s['target']:
+                            log.info(f'SKIP {s["sym"]} — mini gap filled')
+                            continue
+                        if s['direction'] == 'LONG' and ltp >= s['target']:
+                            log.info(f'SKIP {s["sym"]} — mini gap filled')
+                            continue
+                    valid.append(s)
+                except Exception:
+                    continue
+
+            if not valid:
+                continue
+
+            if len(valid) == 1:
                 self.available = float(self.capital)
-                log.info(f'1 lunch signal — using 100% capital')
-            elif len(valid_lunch) >= 2:
-                log.info(f'{len(valid_lunch)} lunch signals — using {config.SIZING*100:.0f}% each')
+            log.info(f'[{scan_hour}:{scan_minute:02d}] {len(valid)} chain signal(s)')
 
-            for s in valid_lunch:
+            for s in valid:
                 self.enter_trade(s)
-            log.info(f'Entered {len(valid_lunch)} lunch gap trades')
-        else:
-            log.info('No lunch gap signals')
+                chain_trades += 1
+                log.info(f'CHAIN TRADE: {s["direction"]} {s["sym"]} gap={s["gap"]}%')
 
-        # Step 6: Monitor until close
+        log.info(f'Chain complete: {chain_trades} trades today')
+
+        # Step 5: Monitor remaining positions until close
         self._monitor_until_close()
 
     def _monitor_until_close(self):
