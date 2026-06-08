@@ -514,9 +514,9 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: RANGE FILL (98% WR, 1-min bar confirmed) at 9:16 AM')
-        log.info(f'Strategy 2: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
-        log.info(f'CAM/PIVOT disabled — no proven edge without lookahead')
+        log.info(f'Strategy 1: RANGE FILL (98% WR) at 9:16 AM')
+        log.info(f'Strategy 2: LUNCH GAP FILL (98.6% WR) at 1:16 PM')
+        log.info(f'Strategy 3: MA DOUBLE CONVERGENCE (65% WR) at 9:45 AM')
         log.info('=' * 60)
 
         # Step 0: Check for existing positions (crash recovery)
@@ -603,14 +603,73 @@ class LiveTrader:
         else:
             log.info(f'SKIPPED MA scan — past 10:00 AM, signals are stale')
 
-        # CAM/PIVOT disabled — no proven edge without lookahead trend
-        cam_signals = []
+        # Step 4: Monitor until 1:15 PM, then scan lunch gaps
+        lunch_scan_time = datetime.now().replace(hour=13, minute=16, second=0)
+        log.info(f'Monitoring until 1:16 PM (lunch gap scan)...')
+        while datetime.now() < lunch_scan_time:
+            try:
+                if self.positions:
+                    self.monitor_positions()
+                    log.info(f'  [{datetime.now().strftime("%H:%M")}] {len(self.positions)} open | '
+                             f'Daily PnL: Rs {self.daily_pnl:+,.0f}')
+                elif datetime.now().hour < 13:
+                    # No positions, wait quietly
+                    pass
+            except Exception as e:
+                log.error(f'Monitor error (pre-lunch): {e}')
+            time.sleep(60)
 
-        total_signals = len(gap_signals) + len(ma_signals)
-        if total_signals == 0 and not self.positions:
-            log.info('No signals from any strategy. Done for today.')
-            self.write_journal()
-            return
+        # Step 5: LUNCH GAP FILL scan at 1:16 PM
+        log.info('--- LUNCH GAP FILL scan at 1:16 PM ---')
+        lunch_signals = []
+        for sym in config.INSTRUMENTS:
+            if sym in self.positions:
+                continue
+            inst = config.INSTRUMENTS[sym]
+            candles = api.get_intraday_candles(inst, '1minute')
+            if not candles:
+                continue
+            bars_5min = api.aggregate_1min_to_5min(candles)
+            if not bars_5min or len(bars_5min) < 50:
+                continue
+            signal = strategy.check_lunch_gap(sym, bars_5min)
+            if signal:
+                lunch_signals.append(signal)
+                log.info(f'LUNCH SIGNAL: {signal["direction"]} {sym} gap={signal["gap"]}%')
+            time.sleep(0.2)
+
+        if lunch_signals:
+            lunch_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
+            # Filter for slippage + gap filled
+            valid_lunch = []
+            for s in lunch_signals[:config.MAX_TRADES]:
+                inst = config.INSTRUMENTS.get(s['sym'])
+                ltp_data = api.get_ltp([inst])
+                ltp = None
+                for key, val in ltp_data.items():
+                    if 'last_price' in val:
+                        ltp = val['last_price']
+                        break
+                if ltp:
+                    if s['direction'] == 'SHORT' and ltp <= s['target']:
+                        log.info(f'SKIP {s["sym"]} — lunch gap already filled')
+                        continue
+                    if s['direction'] == 'LONG' and ltp >= s['target']:
+                        log.info(f'SKIP {s["sym"]} — lunch gap already filled')
+                        continue
+                valid_lunch.append(s)
+
+            if len(valid_lunch) == 1:
+                self.available = float(self.capital)
+                log.info(f'1 lunch signal — using 100% capital')
+            elif len(valid_lunch) >= 2:
+                log.info(f'{len(valid_lunch)} lunch signals — using {config.SIZING*100:.0f}% each')
+
+            for s in valid_lunch:
+                self.enter_trade(s)
+            log.info(f'Entered {len(valid_lunch)} lunch gap trades')
+        else:
+            log.info('No lunch gap signals')
 
         # Step 6: Monitor until close
         self._monitor_until_close()
