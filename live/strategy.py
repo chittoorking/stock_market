@@ -275,6 +275,8 @@ def check_gap_signal(sym, today_bars, prev_close, prev_high=None, prev_low=None)
             'stop': round(today_open * (1 + 1.0/100), 2),
             'target': round(today_open * (1 - 0.5/100), 2),
             'runner_step': 0.10,
+            'trail_trigger': 0.25,
+            'trail_lock': 0.10,
             'level': round(prev_close or prev_high, 2),
             'gap': round(gap, 2),
         }
@@ -290,6 +292,8 @@ def check_gap_signal(sym, today_bars, prev_close, prev_high=None, prev_low=None)
             'stop': round(today_open * (1 - 1.0/100), 2),
             'target': round(today_open * (1 + 0.5/100), 2),
             'runner_step': 0.10,
+            'trail_trigger': 0.25,
+            'trail_lock': 0.10,
             'level': round(prev_close or prev_low, 2),
             'gap': round(gap, 2),
         }
@@ -326,6 +330,8 @@ def check_lunch_gap(sym, today_bars, lunch_bar=45, reopen_bar=48):
             'stop': round(reopen_price * (1 + 0.3/100), 2),
             'target': round(reopen_price * (1 - 0.2/100), 2),
             'runner_step': 0.05,
+            'trail_trigger': 0.10,
+            'trail_lock': 0.10,
             'level': round(lunch_close, 2),
             'gap': round(mini_gap, 2),
         }
@@ -336,6 +342,8 @@ def check_lunch_gap(sym, today_bars, lunch_bar=45, reopen_bar=48):
             'stop': round(reopen_price * (1 - 0.3/100), 2),
             'target': round(reopen_price * (1 + 0.2/100), 2),
             'runner_step': 0.05,
+            'trail_trigger': 0.10,
+            'trail_lock': 0.10,
             'level': round(lunch_close, 2),
             'gap': round(mini_gap, 2),
         }
@@ -353,6 +361,8 @@ def check_exit(signal, current_price, mfe, trail_active, target_hit):
     # Per-signal target and runner step (GAP uses 0.5%/0.25%, CAM uses 1.75%/0.25%)
     sig_target = abs(signal['entry'] - signal['target']) / signal['entry'] * 100
     sig_runner = signal.get('runner_step', config.RUNNER_STEP)
+    sig_trail_trigger = signal.get('trail_trigger', config.TRAIL_ACTIVATE)
+    sig_trail_lock = signal.get('trail_lock', config.TRAIL_LOCK)
 
     if direction == 'SHORT':
         fav = (entry - current_price) / entry * 100
@@ -362,7 +372,7 @@ def check_exit(signal, current_price, mfe, trail_active, target_hit):
         adv = (entry - current_price) / entry * 100
 
     new_mfe = max(mfe, fav)
-    new_trail = trail_active or new_mfe >= min(sig_target, config.TRAIL_ACTIVATE)
+    new_trail = trail_active or new_mfe >= sig_trail_trigger
     new_target_hit = target_hit or new_mfe >= sig_target
 
     # Phase 3: Runner mode (after target hit)
@@ -385,11 +395,11 @@ def check_exit(signal, current_price, mfe, trail_active, target_hit):
     # Phase 2: Trail active (before target)
     if new_trail:
         if direction == 'SHORT':
-            lock_price = entry * (1 - config.TRAIL_LOCK / 100)
+            lock_price = entry * (1 - sig_trail_lock / 100)
             if current_price >= lock_price:
                 return 'trail_stop', lock_price, new_mfe, new_trail, new_target_hit
         else:
-            lock_price = entry * (1 + config.TRAIL_LOCK / 100)
+            lock_price = entry * (1 + sig_trail_lock / 100)
             if current_price <= lock_price:
                 return 'trail_stop', lock_price, new_mfe, new_trail, new_target_hit
 
