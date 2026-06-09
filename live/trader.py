@@ -649,6 +649,8 @@ class LiveTrader:
             # Scan for mini gap signals
             gap_bar = reopen_bar - 3
             signals = []
+            scanned = 0
+            log.info(f'[{scan_hour}:{scan_minute:02d}] Chain scan bar{gap_bar}->bar{reopen_bar}...')
             for sym in config.INSTRUMENTS:
                 if sym in self.positions:
                     continue
@@ -660,14 +662,17 @@ class LiveTrader:
                     bars_5min = api.aggregate_1min_to_5min(candles)
                     if not bars_5min or len(bars_5min) <= reopen_bar:
                         continue
+                    scanned += 1
 
                     signal = strategy.check_lunch_gap(sym, bars_5min, gap_bar, reopen_bar)
                     if signal:
                         signals.append(signal)
-                except Exception:
+                except Exception as e:
+                    log.error(f'Chain scan error {sym}: {e}')
                     continue
                 time.sleep(0.15)
 
+            log.info(f'  Scanned {scanned} stocks, found {len(signals)} signals')
             if not signals:
                 continue
 
