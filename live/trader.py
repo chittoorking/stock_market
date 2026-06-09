@@ -514,7 +514,7 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: RANGE FILL (98% WR) at 9:16 AM')
+        log.info(f'Strategy 1: RANGE FILL (99% WR) at 9:15:15 AM (LTP + 1min fallback)')
         log.info(f'Strategy 2: ALL-DAY CHAIN (98% WR) every 15 min 9:45-2:30')
         log.info(f'Capital works all day — 5.8 trades/day avg')
         log.info('=' * 60)
@@ -529,19 +529,28 @@ class LiveTrader:
         # Step 1: Load historical data
         self.load_historical()
 
-        # Step 2: RANGE FILL scan at 9:16 AM (after first 1-min bar closes)
-        # 1-min bar gives reversal confirmation — proven 98% WR
+        # Step 2: RANGE FILL — 15 sec LTP scan for morning gaps
+        # Then fall back to 1-min bar scan if LTP finds nothing
         gap_signals = []
         now = datetime.now()
-        gap_scan_time = now.replace(hour=9, minute=16, second=5, microsecond=0)
+        gap_scan_time = now.replace(hour=9, minute=15, second=15, microsecond=0)
         gap_deadline = now.replace(hour=9, minute=18, second=0, microsecond=0)
         if now < gap_scan_time:
             wait = (gap_scan_time - now).total_seconds()
-            log.info(f'Waiting {wait:.0f}s until 9:16 AM (1-min bar scan)...')
+            log.info(f'Waiting {wait:.0f}s until 9:15:15 AM (LTP scan)...')
             time.sleep(wait)
 
         if datetime.now() <= gap_deadline:
-            gap_signals = self.scan_gap_signals()
+            # Try fast LTP scan first
+            gap_signals = self.scan_gap_ltp()
+            if not gap_signals:
+                # Fallback: wait for 1-min bar close
+                bar_close = datetime.now().replace(hour=9, minute=16, second=5)
+                if datetime.now() < bar_close:
+                    wait = (bar_close - datetime.now()).total_seconds()
+                    log.info(f'No LTP signals, waiting {wait:.0f}s for 1-min bar fallback...')
+                    time.sleep(wait)
+                gap_signals = self.scan_gap_signals()
 
             # Rank by gap size (biggest gap = most profit per trade)
             gap_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
