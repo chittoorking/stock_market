@@ -622,8 +622,8 @@ class LiveTrader:
         scan_bars = list(range(9, 60, 3))  # Reopen bars: 9,12,15,...,57
 
         for reopen_bar in scan_bars:
-            # Calculate scan time for this window
-            bar_minutes = 15 + reopen_bar * 5  # Minutes from 9:00
+            # Calculate scan time — must wait for reopen bar to CLOSE (+5 min)
+            bar_minutes = 15 + reopen_bar * 5 + 5  # +5 = wait for bar to close
             scan_hour = 9 + bar_minutes // 60
             scan_minute = bar_minutes % 60
             scan_time = datetime.now().replace(hour=scan_hour, minute=scan_minute, second=5)
