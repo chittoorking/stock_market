@@ -376,6 +376,8 @@ class LiveTrader:
                     'stop': round(entry * (1 + 1.0/100), 2),
                     'target': round(entry * (1 - 0.5/100), 2),
                     'runner_step': 0.10,
+                    'trail_trigger': 0.25,
+                    'trail_lock': 0.10,
                     'level': round(prev_close, 2),
                     'gap': round(gap, 2),
                 })
@@ -390,6 +392,8 @@ class LiveTrader:
                     'stop': round(entry * (1 - 1.0/100), 2),
                     'target': round(entry * (1 + 0.5/100), 2),
                     'runner_step': 0.10,
+                    'trail_trigger': 0.25,
+                    'trail_lock': 0.10,
                     'level': round(prev_close, 2),
                     'gap': round(gap, 2),
                 })
