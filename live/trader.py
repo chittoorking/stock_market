@@ -637,6 +637,7 @@ class LiveTrader:
             # Wait until scan time, monitoring positions while waiting
             now = datetime.now()
             if now > scan_time.replace(second=30):
+                prev_window_ltp = {}  # Stale, reset so next window re-captures
                 continue  # More than 30s past window, skip
             while datetime.now() < scan_time:
                 try:
