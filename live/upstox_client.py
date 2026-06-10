@@ -134,8 +134,8 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='I', trigger
                 oid = data.get('data', {}).get('order_id')
                 log.info(f'Order placed: {side} {qty} {sym} @ {price} type={order_type} -> {oid}')
 
-                # For SL orders, verify it wasn't rejected by exchange
-                if order_type in ('SL', 'SL-M') and oid:
+                # Verify order wasn't rejected by exchange (check ALL order types)
+                if oid:
                     import time as _t
                     _t.sleep(1)
                     try:
@@ -144,7 +144,7 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='I', trigger
                         if r2.status_code == 200:
                             for o in r2.json().get('data', []):
                                 if o.get('order_id') == oid and o.get('status') == 'rejected':
-                                    log.error(f'SL REJECTED by exchange: {o.get("status_message", "")[:200]}')
+                                    log.error(f'ORDER REJECTED by exchange: {o.get("status_message", "")[:200]}')
                                     return None
                     except Exception:
                         pass  # Verification failed but order may still be ok

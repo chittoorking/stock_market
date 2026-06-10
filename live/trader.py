@@ -146,8 +146,8 @@ class LiveTrader:
         direction = signal['direction']
         entry = signal['entry']
 
-        # Position sizing: 20% of available capital
-        alloc = self.available * config.SIZING
+        # Position sizing — use 95% to leave room for Upstox margin overhead
+        alloc = self.available * config.SIZING * 0.95
         qty = max(1, int(alloc * config.LEVERAGE / entry))
         margin = qty * entry / config.LEVERAGE
 
