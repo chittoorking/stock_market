@@ -235,21 +235,13 @@ class LiveTrader:
             sl_oid = pos.get('stop_order')
             if tgt_oid and order_statuses.get(tgt_oid) == 'complete':
                 log.info(f'TARGET FILLED on Upstox for {sym}')
-                # Cancel SL
-                if sl_oid and sl_oid not in ('PAPER', 'synced', None):
-                    try: api.cancel_order(sl_oid)
-                    except: pass
-                self.exit_trade(sym, 'target_hit', signal['target'])
+                self.exit_trade(sym, 'target_hit', signal['target'], already_closed=True)
                 continue
 
             # Check if SL order filled on Upstox
             if sl_oid and order_statuses.get(sl_oid) == 'complete':
                 log.info(f'STOP FILLED on Upstox for {sym}')
-                # Cancel target
-                if tgt_oid:
-                    try: api.cancel_order(tgt_oid)
-                    except: pass
-                self.exit_trade(sym, 'stop_loss', signal['stop'])
+                self.exit_trade(sym, 'stop_loss', signal['stop'], already_closed=True)
                 continue
 
             # Poll LTP for trail lock management
@@ -298,8 +290,11 @@ class LiveTrader:
                     except: pass
                 self.exit_trade(sym, action, exit_price)
 
-    def exit_trade(self, sym, reason, exit_price):
-        """Exit a position."""
+    def exit_trade(self, sym, reason, exit_price, already_closed=False):
+        """Exit a position.
+        already_closed=True when target/SL filled on Upstox (position already flat).
+        In that case, DON'T place another MARKET order — just clean up.
+        """
         pos = self.positions.get(sym)
         if not pos:
             return
@@ -322,7 +317,7 @@ class LiveTrader:
             log.info(f'[PAPER] EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
                      f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
         else:
-            # Cancel SL and target orders
+            # Cancel remaining SL and target orders
             for oid_key in ('stop_order', 'target_order'):
                 oid = pos.get(oid_key)
                 if oid and oid not in ('PAPER', 'synced', None):
@@ -331,14 +326,19 @@ class LiveTrader:
                     except Exception as e:
                         log.warning(f'{oid_key} cancel failed for {sym}: {e}')
 
-            # Place MARKET exit order
-            side = 'BUY' if direction == 'SHORT' else 'SELL'
-            exit_oid = api.place_order(sym, qty, side, 0, order_type='MARKET')
-            if not exit_oid:
-                log.error(f'EXIT ORDER FAILED for {sym} — position still open!')
-                return  # Don't delete from self.positions
-            log.info(f'EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
-                     f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
+            if already_closed:
+                # Position already closed by Upstox (target/SL fill) — no MARKET order needed
+                log.info(f'EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
+                         f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f} (Upstox filled)')
+            else:
+                # Position still open — place MARKET exit order
+                side = 'BUY' if direction == 'SHORT' else 'SELL'
+                exit_oid = api.place_order(sym, qty, side, 0, order_type='MARKET')
+                if not exit_oid:
+                    log.error(f'EXIT ORDER FAILED for {sym} — position still open!')
+                    return  # Don't delete from self.positions
+                log.info(f'EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
+                         f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
 
         self.available += pos['margin'] + net_pnl
         self.daily_pnl += net_pnl
