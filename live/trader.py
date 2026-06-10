@@ -4,6 +4,7 @@ import io
 import logging
 import time
 import json
+import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -213,7 +214,6 @@ class LiveTrader:
             return
 
         # Check order statuses to detect target/SL fills
-        import requests
         try:
             token = api.get_token()
             r = requests.get(f'{config.UPSTOX_BASE}/order/retrieve-all',
@@ -254,6 +254,8 @@ class LiveTrader:
 
             # Poll LTP for trail lock management
             inst = config.INSTRUMENTS.get(sym)
+            if not inst:
+                continue
             ltp_data = api.get_ltp([inst])
             if not ltp_data:
                 continue
