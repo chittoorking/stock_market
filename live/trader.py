@@ -146,6 +146,13 @@ class LiveTrader:
         direction = signal['direction']
         entry = signal['entry']
 
+        # Fetch real available margin from Upstox (not internal tracking)
+        if not self.paper_mode:
+            real_margin = self._fetch_available_margin()
+            if real_margin and real_margin < self.available:
+                log.info(f'Upstox margin Rs {real_margin:,.0f} < internal Rs {self.available:,.0f} — using Upstox')
+                self.available = float(real_margin)
+
         # Position sizing — use 95% to leave room for Upstox margin overhead
         alloc = self.available * config.SIZING * 0.95
         qty = max(1, int(alloc * config.LEVERAGE / entry))
