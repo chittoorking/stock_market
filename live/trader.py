@@ -715,10 +715,10 @@ class LiveTrader:
                 prev_window_ltp = dict(ltp_t0)
                 continue
 
-            # Rank by gap size, take best
+            # Rank by gap size, promote to next if top signal is filled
             signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
             valid = []
-            for s in signals[:config.MAX_TRADES]:
+            for s in signals:
                 # Already-filled check
                 if s['direction'] == 'SHORT' and ltp_t10.get(s['sym'], 0) <= s['target']:
                     log.info(f'SKIP {s["sym"]} — gap already filled')
