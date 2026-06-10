@@ -351,6 +351,55 @@ def check_lunch_gap(sym, today_bars, lunch_bar=45, reopen_bar=48):
     return None
 
 
+def check_chain_gap_ltp(sym, prev_bar_close, ltp_at_open, ltp_after_10s):
+    """10-second chain entry — LTP-based, no bar close needed.
+    1. Gap: prev 5-min bar close vs LTP at bar open (>= 0.3%)
+    2. Reversal: LTP at +10s moved 0.05%+ back toward the gap close
+    3. Entry: LTP at +10s (real price, achievable)
+    Returns signal dict or None.
+    """
+    if prev_bar_close <= 0 or ltp_at_open <= 0 or ltp_after_10s <= 0:
+        return None
+
+    mini_gap = (ltp_at_open - prev_bar_close) / prev_bar_close * 100
+    if abs(mini_gap) < 0.3:
+        return None
+
+    # Reversal check: did LTP move back toward prev_bar_close?
+    fb = (ltp_after_10s - ltp_at_open) / ltp_at_open * 100
+
+    if mini_gap > 0 and fb <= -0.05:
+        # Gap UP, price dropping back = SHORT
+        entry = round(ltp_after_10s, 2)
+        return {
+            'sym': sym, 'direction': 'SHORT', 'strategy': 'CHAIN_10S',
+            'entry': entry,
+            'stop': round(entry * (1 + 0.3/100), 2),
+            'target': round(entry * (1 - 0.2/100), 2),
+            'runner_step': 0.05,
+            'trail_trigger': 0.10,
+            'trail_lock': 0.10,
+            'level': round(prev_bar_close, 2),
+            'gap': round(mini_gap, 2),
+        }
+    elif mini_gap < 0 and fb >= 0.05:
+        # Gap DOWN, price rising back = LONG
+        entry = round(ltp_after_10s, 2)
+        return {
+            'sym': sym, 'direction': 'LONG', 'strategy': 'CHAIN_10S',
+            'entry': entry,
+            'stop': round(entry * (1 - 0.3/100), 2),
+            'target': round(entry * (1 + 0.2/100), 2),
+            'runner_step': 0.05,
+            'trail_trigger': 0.10,
+            'trail_lock': 0.10,
+            'level': round(prev_bar_close, 2),
+            'gap': round(mini_gap, 2),
+        }
+
+    return None
+
+
 def check_exit(signal, current_price, mfe, trail_active, target_hit):
     """Check if we should exit. Returns (action, exit_price, new_state) or None.
     action: 'target_hit', 'runner_stop', 'trail_stop', 'stop_loss', None

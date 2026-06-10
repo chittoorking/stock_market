@@ -515,8 +515,8 @@ class LiveTrader:
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
         log.info(f'Strategy 1: RANGE FILL (99% WR) at 9:15:15 AM (LTP + 1min fallback)')
-        log.info(f'Strategy 2: ALL-DAY CHAIN (98% WR) every 15 min 9:45-2:30')
-        log.info(f'Capital works all day — 5.8 trades/day avg')
+        log.info(f'Strategy 2: ALL-DAY CHAIN (82% WR) 10-sec LTP entry every 15 min')
+        log.info(f'Capital works all day — ~9 trades/day avg')
         log.info('=' * 60)
 
         # Step 0: Check for existing positions (crash recovery)
@@ -613,93 +613,120 @@ class LiveTrader:
         else:
             log.info(f'SKIPPED MA scan — past 10:00 AM, signals are stale')
 
-        # Step 4: ALL-DAY CHAIN — scan mini gaps every 15 min from 9:45 to 2:30
-        # Same capital chains from trade to trade (each exits in ~5 min)
-        log.info('Starting ALL-DAY CHAIN — mini gap scans every 15 min...')
+        # Step 4: ALL-DAY CHAIN — 10-second LTP entry every 15 min 9:45-2:30
+        # At each window: get LTP (= bar open), compare to prev window's LTP (= gap_bar close)
+        # Wait 10s, get LTP again. If reversed 0.05%+ → enter.
+        log.info('Starting ALL-DAY CHAIN — 10-sec LTP entry every 15 min...')
         chain_trades = 0
 
-        # Scan windows: every 15 min (3 bars) from bar 6 (9:45) to bar 57 (2:30)
-        scan_bars = list(range(9, 60, 3))  # Reopen bars: 9,12,15,...,57
+        # Scan windows: every 15 min from 9:45 to 14:30
+        scan_bars = list(range(6, 64, 3))
+
+        # Store LTP from previous window as "gap_bar close"
+        prev_window_ltp = {}  # sym -> LTP at end of previous window
 
         for reopen_bar in scan_bars:
-            # Calculate scan time — must wait for reopen bar to CLOSE (+5 min)
-            bar_minutes = 15 + reopen_bar * 5 + 5  # +5 = wait for bar to close
+            # Scan at exact bar open time (not +5 min)
+            bar_minutes = 15 + reopen_bar * 5
             scan_hour = 9 + bar_minutes // 60
             scan_minute = bar_minutes % 60
-            scan_time = datetime.now().replace(hour=scan_hour, minute=scan_minute, second=5)
+            if scan_hour >= 15:
+                break  # Past 3 PM
+            scan_time = datetime.now().replace(hour=scan_hour, minute=scan_minute, second=2)
 
-            # Wait until scan time
+            # Wait until scan time, monitoring positions while waiting
             now = datetime.now()
-            if now > scan_time:
-                continue  # Already past this window
-            if now < scan_time:
-                # Monitor existing positions while waiting
-                while datetime.now() < scan_time:
-                    try:
-                        if self.positions:
-                            self.monitor_positions()
-                    except Exception as e:
-                        log.error(f'Monitor error (chain): {e}')
-                    time.sleep(30)
+            if now > scan_time.replace(second=30):
+                continue  # More than 30s past window, skip
+            while datetime.now() < scan_time:
+                try:
+                    if self.positions:
+                        self.monitor_positions()
+                except Exception as e:
+                    log.error(f'Monitor error (chain): {e}')
+                time.sleep(15)
+
+            log.info(f'[{scan_hour}:{scan_minute:02d}] Chain scan (10-sec LTP entry)...')
+
+            # Build inst list for all active stocks
+            active_syms = [sym for sym in config.INSTRUMENTS if sym not in self.positions]
+            all_insts = [config.INSTRUMENTS[sym] for sym in active_syms]
+            inst_to_sym = {v: k for k, v in config.INSTRUMENTS.items()}
+
+            def batch_ltp(insts):
+                """Fetch LTP for all instruments in batches of 10."""
+                result = {}
+                for i in range(0, len(insts), 10):
+                    batch = insts[i:i+10]
+                    data = api.get_ltp(batch)
+                    if data:
+                        for key, val in data.items():
+                            ltp = val.get('last_price')
+                            inst = val.get('instrument_token', '')
+                            sym = inst_to_sym.get(inst, key.split(':')[-1] if ':' in key else key)
+                            if ltp:
+                                result[sym] = ltp
+                    time.sleep(0.05)
+                return result
+
+            # Phase 1: LTP at second 0 = bar open (for gap vs prev window)
+            ltp_t0 = batch_ltp(all_insts)
+            log.info(f'  T0: got LTP for {len(ltp_t0)} stocks')
+
+            # If first window, just store LTP and skip (no prev to compare)
+            if not prev_window_ltp:
+                prev_window_ltp = dict(ltp_t0)
+                log.info(f'  First window — stored LTP, skipping')
+                continue
 
             # Skip if we still have open positions (capital not free)
             if self.positions:
+                prev_window_ltp = dict(ltp_t0)
+                log.info(f'  Positions open — stored LTP, skipping')
                 continue
 
-            # Scan for mini gap signals
-            gap_bar = reopen_bar - 3
+            # Phase 2: Wait 10 seconds for reversal
+            time.sleep(10)
+
+            # Phase 3: LTP at second 10 = reversal confirmation + entry price
+            ltp_t10 = batch_ltp(all_insts)
+            log.info(f'  T10: got LTP for {len(ltp_t10)} stocks')
+
+            # Phase 4: Check signals
+            # prev_window_ltp = gap_bar close (15 min ago)
+            # ltp_t0 = reopen_bar open (second 0)
+            # ltp_t10 = reversal check (second 10) = entry price
             signals = []
-            scanned = 0
-            log.info(f'[{scan_hour}:{scan_minute:02d}] Chain scan bar{gap_bar}->bar{reopen_bar}...')
-            for sym in config.INSTRUMENTS:
-                if sym in self.positions:
+            for sym in active_syms:
+                if sym not in prev_window_ltp or sym not in ltp_t0 or sym not in ltp_t10:
                     continue
-                try:
-                    inst = config.INSTRUMENTS[sym]
-                    candles = api.get_intraday_candles(inst, '1minute')
-                    if not candles:
-                        continue
-                    bars_5min = api.aggregate_1min_to_5min(candles)
-                    if not bars_5min or len(bars_5min) <= reopen_bar:
-                        continue
-                    scanned += 1
+                signal = strategy.check_chain_gap_ltp(
+                    sym, prev_window_ltp[sym], ltp_t0[sym], ltp_t10[sym])
+                if signal:
+                    signals.append(signal)
 
-                    signal = strategy.check_lunch_gap(sym, bars_5min, gap_bar, reopen_bar)
-                    if signal:
-                        signals.append(signal)
-                except Exception as e:
-                    log.error(f'Chain scan error {sym}: {e}')
-                    continue
-                time.sleep(0.15)
-
-            log.info(f'  Scanned {scanned} stocks, found {len(signals)} signals')
+            log.info(f'  Found {len(signals)} signals from {len(ltp_t0)} stocks')
             if not signals:
+                prev_window_ltp = dict(ltp_t0)
                 continue
 
-            # Rank by gap size, filter, enter
+            # Rank by gap size, take best
             signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
             valid = []
             for s in signals[:config.MAX_TRADES]:
-                try:
-                    inst = config.INSTRUMENTS.get(s['sym'])
-                    ltp_data = api.get_ltp([inst])
-                    ltp = None
-                    for key, val in ltp_data.items():
-                        if 'last_price' in val:
-                            ltp = val['last_price']
-                            break
-                    if ltp:
-                        if s['direction'] == 'SHORT' and ltp <= s['target']:
-                            log.info(f'SKIP {s["sym"]} — mini gap filled')
-                            continue
-                        if s['direction'] == 'LONG' and ltp >= s['target']:
-                            log.info(f'SKIP {s["sym"]} — mini gap filled')
-                            continue
-                    valid.append(s)
-                except Exception:
+                # Already-filled check
+                if s['direction'] == 'SHORT' and ltp_t10.get(s['sym'], 0) <= s['target']:
+                    log.info(f'SKIP {s["sym"]} — gap already filled')
                     continue
+                if s['direction'] == 'LONG' and ltp_t10.get(s['sym'], 0) >= s['target']:
+                    log.info(f'SKIP {s["sym"]} — gap already filled')
+                    continue
+                valid.append(s)
+                if len(valid) >= config.MAX_TRADES:
+                    break
 
             if not valid:
+                prev_window_ltp = dict(ltp_t0)
                 continue
 
             if len(valid) == 1:
@@ -709,7 +736,10 @@ class LiveTrader:
             for s in valid:
                 self.enter_trade(s)
                 chain_trades += 1
-                log.info(f'CHAIN TRADE: {s["direction"]} {s["sym"]} gap={s["gap"]}%')
+                log.info(f'CHAIN TRADE: {s["direction"]} {s["sym"]} gap={s["gap"]}% entry={s["entry"]}')
+
+            # Update prev window LTP for next iteration
+            prev_window_ltp = dict(ltp_t0)
 
         log.info(f'Chain complete: {chain_trades} trades today')
 
