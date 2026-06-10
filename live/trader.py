@@ -188,30 +188,76 @@ class LiveTrader:
                 api.place_order(sym, qty, 'BUY' if side == 'SELL' else 'SELL', 0, order_type='MARKET')
                 return False
 
+            # Place TARGET limit order — Upstox executes instantly when price hits
+            tgt_oid = api.place_order(sym, qty, sl_side, signal['target'], order_type='LIMIT')
+            if tgt_oid:
+                log.info(f'TARGET order placed: {sl_side} {qty} {sym} @ {signal["target"]} -> {tgt_oid}')
+            else:
+                log.warning(f'TARGET order failed for {sym} — will use polling fallback')
+
             self.positions[sym] = {
                 'signal': signal, 'qty': qty, 'margin': margin,
                 'entry_order': entry_oid, 'stop_order': sl_oid,
+                'target_order': tgt_oid,
                 'mfe': 0, 'trail_active': False, 'target_hit': False,
             }
             self.available -= margin
             return True
 
     def monitor_positions(self):
-        """Check all open positions and manage exits."""
+        """Check all open positions and manage exits.
+        Target and SL are on Upstox — check if either filled, cancel the other.
+        Also poll LTP for trail lock adjustments.
+        """
         if not self.positions:
             return
+
+        # Check order statuses to detect target/SL fills
+        import requests
+        try:
+            token = api.get_token()
+            r = requests.get(f'{config.UPSTOX_BASE}/order/retrieve-all',
+                           headers={'Authorization': f'Bearer {token}', 'Accept': 'application/json'},
+                           timeout=10)
+            order_statuses = {}
+            if r.status_code == 200:
+                for o in r.json().get('data', []):
+                    order_statuses[o.get('order_id')] = o.get('status')
+        except Exception:
+            order_statuses = {}
 
         for sym in list(self.positions.keys()):
             pos = self.positions[sym]
             signal = pos['signal']
 
-            # Get current price
+            # Check if target order filled on Upstox
+            tgt_oid = pos.get('target_order')
+            sl_oid = pos.get('stop_order')
+            if tgt_oid and order_statuses.get(tgt_oid) == 'complete':
+                log.info(f'TARGET FILLED on Upstox for {sym}')
+                # Cancel SL
+                if sl_oid and sl_oid not in ('PAPER', 'synced', None):
+                    try: api.cancel_order(sl_oid)
+                    except: pass
+                self.exit_trade(sym, 'target_hit', signal['target'])
+                continue
+
+            # Check if SL order filled on Upstox
+            if sl_oid and order_statuses.get(sl_oid) == 'complete':
+                log.info(f'STOP FILLED on Upstox for {sym}')
+                # Cancel target
+                if tgt_oid:
+                    try: api.cancel_order(tgt_oid)
+                    except: pass
+                self.exit_trade(sym, 'stop_loss', signal['stop'])
+                continue
+
+            # Poll LTP for trail lock management
             inst = config.INSTRUMENTS.get(sym)
             ltp_data = api.get_ltp([inst])
             if not ltp_data:
                 continue
 
-            # Extract LTP
             current_price = None
             for key, val in ltp_data.items():
                 if 'last_price' in val:
@@ -220,7 +266,7 @@ class LiveTrader:
             if not current_price:
                 continue
 
-            # Check exit conditions
+            # Check exit conditions (trail lock, runner)
             action, exit_price, new_mfe, new_trail, new_target = strategy.check_exit(
                 signal, current_price,
                 pos['mfe'], pos['trail_active'], pos['target_hit']
@@ -231,7 +277,23 @@ class LiveTrader:
             pos['trail_active'] = new_trail
             pos['target_hit'] = new_target
 
-            if action:
+            if action and action == 'trail_stop':
+                # Trail lock triggered — cancel both Upstox orders and exit
+                if sl_oid and sl_oid not in ('PAPER', 'synced', None):
+                    try: api.cancel_order(sl_oid)
+                    except: pass
+                if tgt_oid:
+                    try: api.cancel_order(tgt_oid)
+                    except: pass
+                self.exit_trade(sym, action, exit_price)
+            elif action and action not in ('target_hit', 'stop_loss'):
+                # Runner or other exit — cancel both and exit
+                if sl_oid and sl_oid not in ('PAPER', 'synced', None):
+                    try: api.cancel_order(sl_oid)
+                    except: pass
+                if tgt_oid:
+                    try: api.cancel_order(tgt_oid)
+                    except: pass
                 self.exit_trade(sym, action, exit_price)
 
     def exit_trade(self, sym, reason, exit_price):
@@ -258,13 +320,14 @@ class LiveTrader:
             log.info(f'[PAPER] EXIT {direction} {sym}: {reason} @ {exit_price:.2f} '
                      f'PnL={pnl_pct:+.3f}% Rs {net_pnl:+,.0f}')
         else:
-            # Cancel stop loss order first (skip if synced/paper/None)
-            sl_oid = pos.get('stop_order')
-            if sl_oid and sl_oid not in ('PAPER', 'synced', None):
-                try:
-                    api.cancel_order(sl_oid)
-                except Exception as e:
-                    log.warning(f'SL cancel failed for {sym}: {e}')
+            # Cancel SL and target orders
+            for oid_key in ('stop_order', 'target_order'):
+                oid = pos.get(oid_key)
+                if oid and oid not in ('PAPER', 'synced', None):
+                    try:
+                        api.cancel_order(oid)
+                    except Exception as e:
+                        log.warning(f'{oid_key} cancel failed for {sym}: {e}')
 
             # Place MARKET exit order
             side = 'BUY' if direction == 'SHORT' else 'SELL'
