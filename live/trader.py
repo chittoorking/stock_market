@@ -189,12 +189,17 @@ class LiveTrader:
                 api.place_order(sym, qty, 'BUY' if side == 'SELL' else 'SELL', 0, order_type='MARKET')
                 return False
 
-            # Place TARGET limit order — Upstox executes instantly when price hits
-            tgt_oid = api.place_order(sym, qty, sl_side, signal['target'], order_type='LIMIT')
-            if tgt_oid:
-                log.info(f'TARGET order placed: {sl_side} {qty} {sym} @ {signal["target"]} -> {tgt_oid}')
+            # Place TARGET limit order only if target is reachable (not runner mode)
+            tgt_pct = abs(signal['entry'] - signal['target']) / signal['entry'] * 100
+            tgt_oid = None
+            if tgt_pct < 5.0:  # Fixed target — place on Upstox
+                tgt_oid = api.place_order(sym, qty, sl_side, signal['target'], order_type='LIMIT')
+                if tgt_oid:
+                    log.info(f'TARGET order placed: {sl_side} {qty} {sym} @ {signal["target"]} -> {tgt_oid}')
+                else:
+                    log.warning(f'TARGET order failed for {sym} — will use polling fallback')
             else:
-                log.warning(f'TARGET order failed for {sym} — will use polling fallback')
+                log.info(f'RUNNER MODE — no target order, trail will manage exit')
 
             self.positions[sym] = {
                 'signal': signal, 'qty': qty, 'margin': margin,
@@ -446,9 +451,9 @@ class LiveTrader:
                     'sym': sym, 'direction': direction, 'strategy': 'RANGE_FILL',
                     'entry': entry,
                     'stop': round(entry * (1 + 1.0/100), 2),
-                    'target': round(entry * (1 - 0.5/100), 2),
+                    'target': round(entry * (1 - 10.0/100), 2),  # No cap — runner
                     'runner_step': 0.10,
-                    'trail_trigger': 0.25,
+                    'trail_trigger': 0.10,
                     'trail_lock': 0.10,
                     'level': round(prev_close, 2),
                     'gap': round(gap, 2),
@@ -462,9 +467,9 @@ class LiveTrader:
                     'sym': sym, 'direction': direction, 'strategy': 'RANGE_FILL',
                     'entry': entry,
                     'stop': round(entry * (1 - 1.0/100), 2),
-                    'target': round(entry * (1 + 0.5/100), 2),
+                    'target': round(entry * (1 + 10.0/100), 2),  # No cap — runner
                     'runner_step': 0.10,
-                    'trail_trigger': 0.25,
+                    'trail_trigger': 0.10,
                     'trail_lock': 0.10,
                     'level': round(prev_close, 2),
                     'gap': round(gap, 2),

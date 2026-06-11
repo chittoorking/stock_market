@@ -273,9 +273,9 @@ def check_gap_signal(sym, today_bars, prev_close, prev_high=None, prev_low=None)
             'sym': sym, 'direction': 'SHORT', 'strategy': 'RANGE_FILL',
             'entry': round(today_open, 2),
             'stop': round(today_open * (1 + 1.0/100), 2),
-            'target': round(today_open * (1 - 0.5/100), 2),
+            'target': round(today_open * (1 - 10.0/100), 2),  # No cap — runner handles exit
             'runner_step': 0.10,
-            'trail_trigger': 0.25,
+            'trail_trigger': 0.10,  # Start trailing at +0.10%
             'trail_lock': 0.10,
             'level': round(prev_close or prev_high, 2),
             'gap': round(gap, 2),
@@ -290,9 +290,9 @@ def check_gap_signal(sym, today_bars, prev_close, prev_high=None, prev_low=None)
             'sym': sym, 'direction': 'LONG', 'strategy': 'RANGE_FILL',
             'entry': round(today_open, 2),
             'stop': round(today_open * (1 - 1.0/100), 2),
-            'target': round(today_open * (1 + 0.5/100), 2),
+            'target': round(today_open * (1 + 10.0/100), 2),  # No cap — runner handles exit
             'runner_step': 0.10,
-            'trail_trigger': 0.25,
+            'trail_trigger': 0.10,  # Start trailing at +0.10%
             'trail_lock': 0.10,
             'level': round(prev_close or prev_low, 2),
             'gap': round(gap, 2),
