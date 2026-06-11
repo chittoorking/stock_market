@@ -624,6 +624,20 @@ class LiveTrader:
         if datetime.now() <= gap_deadline:
             # Try fast LTP scan first
             gap_signals = self.scan_gap_ltp()
+
+            # BREADTH FILTER: if 15+ stocks gap same direction, it's a market-wide move
+            # Don't fight the market — skip gap fill
+            if gap_signals:
+                longs = sum(1 for s in gap_signals if s['direction'] == 'LONG')
+                shorts = sum(1 for s in gap_signals if s['direction'] == 'SHORT')
+                if longs >= 15:
+                    log.info(f'BREADTH BLOCK: {longs} stocks gapped DOWN (market selloff) — skipping gap fill')
+                    gap_signals = []
+                elif shorts >= 15:
+                    log.info(f'BREADTH BLOCK: {shorts} stocks gapped UP (market rally) — skipping gap fill')
+                    gap_signals = []
+                else:
+                    log.info(f'Breadth OK: {longs} LONG, {shorts} SHORT — isolated gaps')
             if not gap_signals:
                 # Fallback: wait for 1-min bar close
                 bar_close = datetime.now().replace(hour=9, minute=16, second=5)
