@@ -351,6 +351,84 @@ def check_lunch_gap(sym, today_bars, lunch_bar=45, reopen_bar=48):
     return None
 
 
+def check_momentum_signal(sym, bars_5min, bar_index, lookback=4):
+    """Momentum strategy — 20-min moving window.
+    1. Stock moved 0.7%+ in last 20 min (lookback=4 bars on 5-min)
+    2. Volume rising strongly (ROC > 0.5x)
+    3. RSI > 70 (LONG) or RSI < 30 (SHORT)
+    4. Enter in momentum direction (same as the move)
+    5. Runner trail 0.10%, stop 0.30%
+    Returns (signal_dict, rsi_score) or (None, 0).
+    """
+    i = bar_index
+    if i < max(lookback, 15) or i >= len(bars_5min):
+        return None, 0
+
+    bars = bars_5min
+    prev_close = bars[i - lookback]['close']
+    curr_open = bars[i]['open']
+    if prev_close <= 0:
+        return None, 0
+
+    gap = (curr_open - prev_close) / prev_close * 100
+    if abs(gap) < 0.7:
+        return None, 0
+
+    # Volume ROC: current bar vs avg of last 3
+    vol_3 = sum(bars[j]['volume'] for j in range(max(0, i-3), i)) / 3
+    if vol_3 <= 0:
+        return None, 0
+    vroc = (bars[i]['volume'] - vol_3) / vol_3
+    if vroc < 0.5:
+        return None, 0
+
+    # RSI on 5-min closes
+    closes = [bars[j]['close'] for j in range(0, i + 1)]
+    if len(closes) < 15:
+        return None, 0
+    # RSI calculation
+    gains = []
+    loss_vals = []
+    for j in range(1, len(closes)):
+        diff = closes[j] - closes[j-1]
+        gains.append(max(diff, 0))
+        loss_vals.append(max(-diff, 0))
+    if len(gains) < 14:
+        return None, 0
+    avg_gain = sum(gains[-14:]) / 14
+    avg_loss = sum(loss_vals[-14:]) / 14
+    if avg_loss == 0:
+        rsi = 100
+    else:
+        rsi = 100 - 100 / (1 + avg_gain / avg_loss)
+
+    # Direction: momentum = same as the move
+    if gap > 0:
+        direction = 'LONG'
+        if rsi < 70:
+            return None, 0
+        rsi_score = rsi  # Higher RSI = stronger momentum
+    else:
+        direction = 'SHORT'
+        if rsi > 30:
+            return None, 0
+        rsi_score = 100 - rsi  # Lower RSI = stronger short momentum
+
+    entry = round(curr_open, 2)
+    return {
+        'sym': sym, 'direction': direction, 'strategy': 'MOMENTUM',
+        'entry': entry,
+        'stop': round(entry * (1 - 0.30/100), 2) if direction == 'LONG' else round(entry * (1 + 0.30/100), 2),
+        'target': round(entry * (1 + 10.0/100), 2) if direction == 'LONG' else round(entry * (1 - 10.0/100), 2),
+        'runner_step': 0.10,
+        'trail_trigger': 0.10,
+        'trail_lock': 0.10,
+        'level': round(prev_close, 2),
+        'gap': round(gap, 2),
+        'rsi': round(rsi, 1),
+    }, rsi_score
+
+
 def check_chain_gap_ltp(sym, prev_bar_close, ltp_at_open, ltp_after_10s):
     """10-second chain entry — LTP-based, no bar close needed.
     1. Gap: prev 5-min bar close vs LTP at bar open (>= 0.3%)

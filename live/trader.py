@@ -595,9 +595,9 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: RANGE FILL (99% WR) at 9:15:15 AM (LTP + 1min fallback)')
-        log.info(f'Strategy 2: ALL-DAY CHAIN (82% WR) 10-sec LTP entry every 15 min')
-        log.info(f'Capital works all day — ~9 trades/day avg')
+        log.info(f'Strategy 1: MORNING GAP FILL (runner) at 9:15:15 AM')
+        log.info(f'Strategy 2: MOMENTUM (86% WR) every 5 min, RSI+Vol, runner exit')
+        log.info(f'Morning gap + ~1.7 momentum trades/day')
         log.info('=' * 60)
 
         # Step 0: Check for existing positions (crash recovery)
@@ -674,12 +674,93 @@ class LiveTrader:
         else:
             log.info(f'SKIPPED gap scan — past 9:18 AM, signals are stale')
 
-        # Step 3: Monitor positions until close (chain disabled — under research)
-        log.info('Chain and MA disabled — morning gap fill only')
+        # Step 3: MOMENTUM — scan every 5 min from 9:45 to 2:45
+        # 20-min moving window, RSI>70/RSI<30, volume rising, runner exit
+        log.info('Starting MOMENTUM scan — every 5 min, 20-min lookback...')
+        momentum_trades = 0
 
-        # Chain disabled — monitoring gap fill positions until close
+        # Scan every 5 min bar from 9:45 to 14:45
+        for bar_idx in range(6, 66):  # bar 6 = 9:45, bar 65 = 14:40
+            bar_minutes = 15 + bar_idx * 5
+            scan_hour = 9 + bar_minutes // 60
+            scan_minute = bar_minutes % 60
+            if scan_hour >= 15:
+                break
+            scan_time = datetime.now().replace(hour=scan_hour, minute=scan_minute, second=5)
 
-        # Step 5: Monitor remaining positions until close
+            # Wait until scan time, monitoring positions
+            now = datetime.now()
+            if now > scan_time.replace(second=30):
+                continue  # Past this window
+            while datetime.now() < scan_time:
+                try:
+                    if self.positions:
+                        self.monitor_positions()
+                except Exception as e:
+                    log.error(f'Monitor error (momentum): {e}')
+                time.sleep(15)
+
+            # Skip if capital is locked in a position
+            if self.positions:
+                continue
+
+            # Fetch 5-min bars for all stocks
+            signals = []
+            for sym in config.INSTRUMENTS:
+                if sym in self.positions:
+                    continue
+                try:
+                    inst = config.INSTRUMENTS[sym]
+                    candles = api.get_intraday_candles(inst, '1minute')
+                    if not candles:
+                        continue
+                    bars_5min = api.aggregate_1min_to_5min(candles)
+                    if not bars_5min or len(bars_5min) <= bar_idx:
+                        continue
+
+                    signal, rsi_score = strategy.check_momentum_signal(
+                        sym, bars_5min, bar_idx, lookback=4)
+                    if signal:
+                        signals.append((rsi_score, signal))
+                except Exception as e:
+                    log.error(f'Momentum scan error {sym}: {e}')
+                time.sleep(0.15)
+
+            if not signals:
+                continue
+
+            # Rank by RSI strength (highest momentum first)
+            signals.sort(reverse=True)
+            log.info(f'[{scan_hour}:{scan_minute:02d}] Found {len(signals)} momentum signals')
+
+            # Check Upstox margin and enter best valid signal
+            for rsi_score, s in signals:
+                # Check if gap already filled
+                try:
+                    inst = config.INSTRUMENTS.get(s['sym'])
+                    ltp_data = api.get_ltp([inst])
+                    ltp = None
+                    for key, val in ltp_data.items():
+                        if 'last_price' in val:
+                            ltp = val['last_price']
+                            break
+                    if ltp:
+                        slippage = abs(ltp - s['entry']) / s['entry'] * 100
+                        if slippage > 0.5:
+                            log.info(f'SKIP {s["sym"]} — slippage {slippage:.2f}%')
+                            continue
+                except Exception:
+                    continue
+
+                self.available = float(self.capital)
+                if self.enter_trade(s):
+                    momentum_trades += 1
+                    log.info(f'MOMENTUM: {s["direction"]} {s["sym"]} gap={s["gap"]}% RSI={s["rsi"]}')
+                    break  # One trade at a time
+
+        log.info(f'Momentum complete: {momentum_trades} trades today')
+
+        # Step 4: Monitor remaining positions until close
         self._monitor_until_close()
 
     def _monitor_until_close(self):
