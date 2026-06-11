@@ -679,8 +679,9 @@ class LiveTrader:
         log.info('Starting MOMENTUM scan — every 5 min, 20-min lookback...')
         momentum_trades = 0
 
-        # Scan every 5 min bar from 9:45 to 14:45
-        for bar_idx in range(6, 66):  # bar 6 = 9:45, bar 65 = 14:40
+        # Scan every 5 min bar from 9:35 to 14:45
+        # Need 4 bars of lookback, first bar at 9:20, so bar 4 (9:35) is earliest
+        for bar_idx in range(4, 66):  # bar 4 = 9:35, bar 65 = 14:40
             bar_minutes = 15 + bar_idx * 5
             scan_hour = 9 + bar_minutes // 60
             scan_minute = bar_minutes % 60
