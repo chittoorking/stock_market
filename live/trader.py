@@ -595,9 +595,8 @@ class LiveTrader:
         mode = 'PAPER' if self.paper_mode else 'LIVE'
         log.info('=' * 60)
         log.info(f'CAM BOT v5 | {mode} | Capital: Rs {self.capital:,}')
-        log.info(f'Strategy 1: MORNING GAP FILL (runner) at 9:15:15 AM')
-        log.info(f'Strategy 2: MOMENTUM (86% WR) every 5 min, RSI+Vol, runner exit')
-        log.info(f'Morning gap + ~1.7 momentum trades/day')
+        log.info(f'BASKET GAP FILL | Enter ALL 1%+ gaps | 4-12 stocks')
+        log.info(f'Stop 0.30% Trail 0.05% | 85% green days')
         log.info('=' * 60)
 
         # Step 0: Check for existing positions (crash recovery)
@@ -610,172 +609,119 @@ class LiveTrader:
         # Step 1: Load historical data
         self.load_historical()
 
-        # Step 2: RANGE FILL — 15 sec LTP scan for morning gaps
-        # Then fall back to 1-min bar scan if LTP finds nothing
-        gap_signals = []
+        # Step 2: BASKET GAP FILL — enter ALL 1%+ gap stocks
         now = datetime.now()
         gap_scan_time = now.replace(hour=9, minute=15, second=15, microsecond=0)
         gap_deadline = now.replace(hour=9, minute=18, second=0, microsecond=0)
         if now < gap_scan_time:
             wait = (gap_scan_time - now).total_seconds()
-            log.info(f'Waiting {wait:.0f}s until 9:15:15 AM (LTP scan)...')
+            log.info(f'Waiting {wait:.0f}s until 9:15:15 AM...')
             time.sleep(wait)
 
         if datetime.now() <= gap_deadline:
-            # Try fast LTP scan first
-            gap_signals = self.scan_gap_ltp()
+            log.info('Scanning ALL stocks for 1%+ gaps...')
 
-            # BREADTH FILTER: if 15+ stocks gap same direction, it's a market-wide move
-            # Don't fight the market — skip gap fill
-            if gap_signals:
-                longs = sum(1 for s in gap_signals if s['direction'] == 'LONG')
-                shorts = sum(1 for s in gap_signals if s['direction'] == 'SHORT')
-                if longs >= 15:
-                    log.info(f'BREADTH BLOCK: {longs} stocks gapped DOWN (market selloff) — skipping gap fill')
-                    gap_signals = []
-                elif shorts >= 15:
-                    log.info(f'BREADTH BLOCK: {shorts} stocks gapped UP (market rally) — skipping gap fill')
-                    gap_signals = []
-                else:
-                    log.info(f'Breadth OK: {longs} LONG, {shorts} SHORT — isolated gaps')
-            if not gap_signals:
-                # Fallback: wait for 1-min bar close
-                bar_close = datetime.now().replace(hour=9, minute=16, second=5)
-                if datetime.now() < bar_close:
-                    wait = (bar_close - datetime.now()).total_seconds()
-                    log.info(f'No LTP signals, waiting {wait:.0f}s for 1-min bar fallback...')
-                    time.sleep(wait)
-                gap_signals = self.scan_gap_signals()
-
-            # Rank by gap size (biggest gap = most profit per trade)
-            gap_signals.sort(key=lambda s: abs(s.get('gap', 0)), reverse=True)
-            log.info(f'Ranked {len(gap_signals)} signals by gap size')
-
-            # Filter ALL signals (not just top 2), then take top 2 valid ones
-            valid_signals = []
-            for s in gap_signals:
-                inst = config.INSTRUMENTS.get(s['sym'])
-                ltp_data = api.get_ltp([inst])
-                ltp = None
-                for key, val in ltp_data.items():
-                    if 'last_price' in val:
-                        ltp = val['last_price']
-                        break
-                if ltp:
-                    if s['direction'] == 'SHORT' and ltp <= s['target']:
-                        log.info(f'SKIP {s["sym"]} — gap already filled (ltp={ltp:.2f} <= target={s["target"]})')
-                        continue
-                    if s['direction'] == 'LONG' and ltp >= s['target']:
-                        log.info(f'SKIP {s["sym"]} — gap already filled (ltp={ltp:.2f} >= target={s["target"]})')
-                        continue
-                    slippage = abs(ltp - s['entry']) / s['entry'] * 100
-                    if slippage > 0.5:
-                        log.info(f'SKIP {s["sym"]} — too much slippage ({slippage:.2f}% from entry {s["entry"]})')
-                        continue
-                valid_signals.append(s)
-                if len(valid_signals) >= config.MAX_TRADES:
-                    break  # Got enough valid signals
-
-            # Size AFTER filtering — use 100% capital on 1 signal
-            if len(valid_signals) == 1:
-                self.available = float(self.capital)
-                log.info(f'1 valid signal — using 100% capital')
-            elif len(valid_signals) >= 2:
-                log.info(f'{len(valid_signals)} valid signals — using {config.SIZING*100:.0f}% each')
-
-            for s in valid_signals:
-                self.enter_trade(s)
-        else:
-            log.info(f'SKIPPED gap scan — past 9:18 AM, signals are stale')
-
-        # Step 3: MOMENTUM — scan every 5 min from 9:45 to 2:45
-        # 20-min moving window, RSI>70/RSI<30, volume rising, runner exit
-        log.info('Starting MOMENTUM scan — every 5 min, 20-min lookback...')
-        momentum_trades = 0
-
-        # Scan every 5 min bar from 9:35 to 14:45
-        # Need 4 bars of lookback, first bar at 9:20, so bar 4 (9:35) is earliest
-        for bar_idx in range(4, 66):  # bar 4 = 9:35, bar 65 = 14:40
-            bar_minutes = 15 + bar_idx * 5
-            scan_hour = 9 + bar_minutes // 60
-            scan_minute = bar_minutes % 60
-            if scan_hour >= 15:
-                break
-            scan_time = datetime.now().replace(hour=scan_hour, minute=scan_minute, second=5)
-
-            # Wait until scan time, monitoring positions
-            now = datetime.now()
-            if now > scan_time.replace(second=30):
-                continue  # Past this window
-            while datetime.now() < scan_time:
-                try:
-                    if self.positions:
-                        self.monitor_positions()
-                except Exception as e:
-                    log.error(f'Monitor error (momentum): {e}')
-                time.sleep(15)
-
-            # Skip if capital is locked in a position
-            if self.positions:
-                continue
-
-            # Fetch 5-min bars for all stocks
-            signals = []
-            for sym in config.INSTRUMENTS:
-                if sym in self.positions:
-                    continue
-                try:
-                    inst = config.INSTRUMENTS[sym]
-                    candles = api.get_intraday_candles(inst, '1minute')
-                    if not candles:
-                        continue
-                    bars_5min = api.aggregate_1min_to_5min(candles)
-                    if not bars_5min or len(bars_5min) <= bar_idx:
-                        continue
-
-                    signal, rsi_score = strategy.check_momentum_signal(
-                        sym, bars_5min, bar_idx, lookback=4)
-                    if signal:
-                        signals.append((rsi_score, signal))
-                except Exception as e:
-                    log.error(f'Momentum scan error {sym}: {e}')
-                time.sleep(0.15)
-
-            if not signals:
-                continue
-
-            # Rank by RSI strength (highest momentum first)
-            signals.sort(reverse=True)
-            log.info(f'[{scan_hour}:{scan_minute:02d}] Found {len(signals)} momentum signals')
-
-            # Check Upstox margin and enter best valid signal
-            for rsi_score, s in signals:
-                # Check if gap already filled
-                try:
-                    inst = config.INSTRUMENTS.get(s['sym'])
-                    ltp_data = api.get_ltp([inst])
-                    ltp = None
+            # Batch LTP for all stocks
+            all_insts = [config.INSTRUMENTS[sym] for sym in config.INSTRUMENTS
+                         if sym in self.daily_closes]
+            inst_to_sym = {v: k for k, v in config.INSTRUMENTS.items()}
+            all_ltps = {}
+            for i in range(0, len(all_insts), 10):
+                batch = all_insts[i:i+10]
+                ltp_data = api.get_ltp(batch)
+                if ltp_data:
                     for key, val in ltp_data.items():
-                        if 'last_price' in val:
-                            ltp = val['last_price']
-                            break
-                    if ltp:
-                        slippage = abs(ltp - s['entry']) / s['entry'] * 100
-                        if slippage > 0.5:
-                            log.info(f'SKIP {s["sym"]} — slippage {slippage:.2f}%')
-                            continue
-                except Exception:
+                        ltp = val.get('last_price')
+                        inst = val.get('instrument_token', '')
+                        sym = inst_to_sym.get(inst, key.split(':')[-1] if ':' in key else key)
+                        if ltp and sym in self.daily_closes:
+                            all_ltps[sym] = ltp
+                time.sleep(0.1)
+            log.info(f'Got LTP for {len(all_ltps)} stocks')
+
+            # Find ALL 1%+ gap stocks
+            gap_stocks = []
+            for sym, ltp in all_ltps.items():
+                closes = self.daily_closes.get(sym, [])
+                if not closes:
                     continue
+                prev_close = closes[-1]
+                if prev_close <= 0:
+                    continue
+                gap = (ltp - prev_close) / prev_close * 100
+                if abs(gap) < 1.0:
+                    continue
+                direction = 'SHORT' if gap > 0 else 'LONG'
+                entry = round(ltp, 2)
+                stop = round(entry * (1 - 0.30/100), 2) if direction == 'LONG' else round(entry * (1 + 0.30/100), 2)
+                gap_stocks.append({
+                    'sym': sym, 'direction': direction, 'strategy': 'BASKET_GAP',
+                    'entry': entry, 'stop': stop,
+                    'target': round(entry * (1 + 10.0/100), 2) if direction == 'LONG' else round(entry * (1 - 10.0/100), 2),
+                    'runner_step': 0.05, 'trail_trigger': 0.05, 'trail_lock': 0.05,
+                    'gap': round(gap, 2), 'level': round(prev_close, 2),
+                })
+                log.info(f'GAP: {direction} {sym} gap={gap:+.2f}% ltp={ltp:.2f}')
 
-                self.available = float(self.capital)
-                if self.enter_trade(s):
-                    momentum_trades += 1
-                    log.info(f'MOMENTUM: {s["direction"]} {s["sym"]} gap={s["gap"]}% RSI={s["rsi"]}')
-                    break  # One trade at a time
+            n_gaps = len(gap_stocks)
+            longs = sum(1 for s in gap_stocks if s['direction'] == 'LONG')
+            shorts = sum(1 for s in gap_stocks if s['direction'] == 'SHORT')
+            log.info(f'Found {n_gaps} gap stocks: {longs} LONG, {shorts} SHORT')
 
-        log.info(f'Momentum complete: {momentum_trades} trades today')
+            # BASKET RULES: 4-12 stocks only
+            if n_gaps < 4:
+                log.info(f'SKIP — only {n_gaps} gaps, need 4+ for basket')
+            elif n_gaps > 12:
+                log.info(f'SKIP — {n_gaps} gaps, market-wide event')
+            else:
+                # Fetch real margin
+                if not self.paper_mode:
+                    real_margin = self._fetch_available_margin()
+                    if real_margin:
+                        self.capital = real_margin
+                        self.available = float(real_margin)
 
-        # Step 4: Monitor remaining positions until close
+                # Enter ALL gap stocks with equal capital
+                alloc_per = self.available * 0.95 / n_gaps
+                entered = 0
+                for s in gap_stocks:
+                    qty = max(1, int(alloc_per * config.LEVERAGE / s['entry']))
+                    margin = qty * s['entry'] / config.LEVERAGE
+                    if self.paper_mode:
+                        log.info(f'[PAPER] {s["direction"]} {qty} {s["sym"]} @ {s["entry"]}')
+                        self.positions[s['sym']] = {
+                            'signal': s, 'qty': qty, 'margin': margin,
+                            'entry_order': 'PAPER', 'stop_order': 'PAPER', 'target_order': None,
+                            'mfe': 0, 'trail_active': False, 'target_hit': False,
+                        }
+                        entered += 1
+                    else:
+                        side = 'SELL' if s['direction'] == 'SHORT' else 'BUY'
+                        entry_oid = api.place_order(s['sym'], qty, side, 0, order_type='MARKET')
+                        if not entry_oid:
+                            log.error(f'Entry FAILED {s["sym"]}')
+                            continue
+                        sl_side = 'BUY' if s['direction'] == 'SHORT' else 'SELL'
+                        sl_oid = api.place_order(s['sym'], qty, sl_side, 0,
+                                                 order_type='SL-M', trigger_price=s['stop'])
+                        if not sl_oid:
+                            log.error(f'SL FAILED {s["sym"]} — exiting')
+                            api.place_order(s['sym'], qty, 'BUY' if side == 'SELL' else 'SELL', 0, order_type='MARKET')
+                            continue
+                        log.info(f'BASKET: {s["direction"]} {qty} {s["sym"]} gap={s["gap"]}%')
+                        self.positions[s['sym']] = {
+                            'signal': s, 'qty': qty, 'margin': margin,
+                            'entry_order': entry_oid, 'stop_order': sl_oid, 'target_order': None,
+                            'mfe': 0, 'trail_active': False, 'target_hit': False,
+                        }
+                        entered += 1
+                        self.available -= margin
+                    time.sleep(0.3)
+                log.info(f'BASKET: entered {entered}/{n_gaps} stocks')
+        else:
+            log.info(f'SKIPPED — past 9:18 AM')
+
+        # Step 3: Monitor all basket positions until close
         self._monitor_until_close()
 
     def _monitor_until_close(self):
