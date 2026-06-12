@@ -721,7 +721,71 @@ class LiveTrader:
         else:
             log.info(f'SKIPPED — past 9:18 AM')
 
-        # Step 3: Monitor all basket positions until close
+        # Step 3: If basket skipped or exited early, run momentum
+        # Momentum: 0.7%+ move in 20 min, vol rising 50%+, RSI>70/RSI<30
+        if not self.positions:
+            log.info('No basket positions — starting momentum scan...')
+            for bar_idx in range(4, 66):
+                bar_minutes = 15 + bar_idx * 5
+                scan_hour = 9 + bar_minutes // 60
+                scan_minute = bar_minutes % 60
+                if scan_hour >= 15:
+                    break
+                scan_time = datetime.now().replace(hour=scan_hour, minute=scan_minute, second=5)
+                now = datetime.now()
+                if now > scan_time.replace(second=30):
+                    continue
+                while datetime.now() < scan_time:
+                    try:
+                        if self.positions:
+                            self.monitor_positions()
+                    except Exception as e:
+                        log.error(f'Monitor error: {e}')
+                    time.sleep(15)
+
+                if self.positions:
+                    continue
+
+                # Scan all stocks for momentum
+                signals = []
+                for sym in config.INSTRUMENTS:
+                    if sym in self.positions:
+                        continue
+                    try:
+                        inst = config.INSTRUMENTS[sym]
+                        candles = api.get_intraday_candles(inst, '1minute')
+                        if not candles:
+                            continue
+                        bars_5min = api.aggregate_1min_to_5min(candles)
+                        if not bars_5min or len(bars_5min) <= bar_idx:
+                            continue
+                        signal, rsi_score = strategy.check_momentum_signal(
+                            sym, bars_5min, bar_idx, lookback=4)
+                        if signal:
+                            signals.append((rsi_score, signal))
+                    except Exception as e:
+                        pass
+                    time.sleep(0.15)
+
+                if not signals:
+                    continue
+
+                signals.sort(reverse=True)
+                log.info(f'[{scan_hour}:{scan_minute:02d}] {len(signals)} momentum signals')
+
+                # Enter best signal with full capital
+                for rsi_score, s in signals:
+                    if not self.paper_mode:
+                        real_margin = self._fetch_available_margin()
+                        if real_margin:
+                            self.available = float(real_margin)
+                    else:
+                        self.available = float(self.capital)
+                    if self.enter_trade(s):
+                        log.info(f'MOMENTUM: {s["direction"]} {s["sym"]} gap={s["gap"]}% RSI={s.get("rsi")}')
+                        break
+
+        # Step 4: Monitor all positions until close
         self._monitor_until_close()
 
     def _monitor_until_close(self):
