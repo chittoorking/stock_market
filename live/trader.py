@@ -773,17 +773,54 @@ class LiveTrader:
                 signals.sort(reverse=True)
                 log.info(f'[{scan_hour}:{scan_minute:02d}] {len(signals)} momentum signals')
 
-                # Enter best signal with full capital
+                # MOMENTUM BASKET: enter ALL qualifying signals with equal split
+                if not self.paper_mode:
+                    real_margin = self._fetch_available_margin()
+                    if real_margin:
+                        self.capital = real_margin
+                        self.available = float(real_margin)
+                else:
+                    self.available = float(self.capital)
+
+                n_signals = len(signals)
+                alloc_per = self.available * 0.95 / n_signals
+                entered = 0
                 for rsi_score, s in signals:
-                    if not self.paper_mode:
-                        real_margin = self._fetch_available_margin()
-                        if real_margin:
-                            self.available = float(real_margin)
+                    qty = max(1, int(alloc_per * config.LEVERAGE / s['entry']))
+                    margin = qty * s['entry'] / config.LEVERAGE
+                    if self.paper_mode:
+                        log.info(f'[PAPER] MOMENTUM {s["direction"]} {qty} {s["sym"]} RSI={s.get("rsi")}')
+                        self.positions[s['sym']] = {
+                            'signal': s, 'qty': qty, 'margin': margin,
+                            'entry_order': 'PAPER', 'stop_order': 'PAPER', 'target_order': None,
+                            'mfe': 0, 'trail_active': False, 'target_hit': False,
+                        }
+                        entered += 1
                     else:
-                        self.available = float(self.capital)
-                    if self.enter_trade(s):
-                        log.info(f'MOMENTUM: {s["direction"]} {s["sym"]} gap={s["gap"]}% RSI={s.get("rsi")}')
-                        break
+                        side = 'SELL' if s['direction'] == 'SHORT' else 'BUY'
+                        entry_oid = api.place_order(s['sym'], qty, side, 0, order_type='MARKET')
+                        if not entry_oid:
+                            log.error(f'Entry FAILED {s["sym"]}')
+                            continue
+                        sl_side = 'BUY' if s['direction'] == 'SHORT' else 'SELL'
+                        sl_oid = api.place_order(s['sym'], qty, sl_side, 0,
+                                                 order_type='SL-M', trigger_price=s['stop'])
+                        if not sl_oid:
+                            log.error(f'SL FAILED {s["sym"]} — exiting')
+                            api.place_order(s['sym'], qty, 'BUY' if side == 'SELL' else 'SELL', 0, order_type='MARKET')
+                            continue
+                        log.info(f'MOMENTUM BASKET: {s["direction"]} {qty} {s["sym"]} RSI={s.get("rsi")} gap={s["gap"]}%')
+                        self.positions[s['sym']] = {
+                            'signal': s, 'qty': qty, 'margin': margin,
+                            'entry_order': entry_oid, 'stop_order': sl_oid, 'target_order': None,
+                            'mfe': 0, 'trail_active': False, 'target_hit': False,
+                        }
+                        entered += 1
+                        self.available -= margin
+                    time.sleep(0.3)
+                if entered > 0:
+                    log.info(f'MOMENTUM BASKET: entered {entered}/{n_signals} stocks')
+                    break  # Wait for this basket to exit before next scan
 
         # Step 4: Monitor all positions until close
         self._monitor_until_close()
