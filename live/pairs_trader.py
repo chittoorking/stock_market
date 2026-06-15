@@ -256,12 +256,19 @@ class PairsTrader:
 
         log.info(f'Monitoring {len(self.positions)} pairs...')
 
+        last_price_time = time.time()
+        MAX_NO_PRICE_SECS = 300  # 5 min without prices = force close
+        # Also set a hard deadline — don't monitor pairs past 10:00 AM
+        deadline = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+
         while self.positions:
             try:
-                all_syms = []
-                for pk, pos in self.positions.items():
-                    all_syms.extend([pos['laggard']['sym'], pos['leader']['sym']])
+                if datetime.now() > deadline:
+                    log.warning('Pairs deadline 10:00 AM — closing all pairs')
+                    self.close_all()
+                    break
 
+                got_price = False
                 for pk in list(self.positions.keys()):
                     if pk not in self.positions:
                         continue
@@ -269,8 +276,21 @@ class PairsTrader:
                     lag_exit = self._check_leg(pos['laggard'])
                     lead_exit = self._check_leg(pos['leader'])
 
+                    # Track if we got any prices
+                    lag_p = self.price_feed.get_ltp(pos['laggard']['sym'])
+                    lead_p = self.price_feed.get_ltp(pos['leader']['sym'])
+                    if lag_p > 0 or lead_p > 0:
+                        got_price = True
+
                     if lag_exit or lead_exit:
                         self._exit_pair(pk)
+
+                if got_price:
+                    last_price_time = time.time()
+                elif time.time() - last_price_time > MAX_NO_PRICE_SECS:
+                    log.error('NO PRICE UPDATES for 5 min — force closing all pairs')
+                    self.close_all()
+                    break
 
                 time.sleep(0.1)
             except KeyboardInterrupt:

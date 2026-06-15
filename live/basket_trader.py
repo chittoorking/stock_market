@@ -122,23 +122,29 @@ class PriceFeed:
         def on_close(ws, close_code, close_msg):
             log.warning(f'WebSocket price feed: CLOSED ({close_code})')
             self._connected.clear()
-            # Auto-reconnect after 5 seconds
-            time.sleep(5)
-            if self._thread and self._thread.is_alive():
-                self._run(token)
 
-        try:
-            self.ws = websocket.WebSocketApp(
-                WS_PRICES,
-                header={'Authorization': token},
-                on_open=on_open,
-                on_message=on_message,
-                on_error=on_error,
-                on_close=on_close,
-            )
-            self.ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            log.error(f'WebSocket price feed failed: {e}')
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                self.ws = websocket.WebSocketApp(
+                    WS_PRICES,
+                    header={'Authorization': token},
+                    on_open=on_open,
+                    on_message=on_message,
+                    on_error=on_error,
+                    on_close=on_close,
+                )
+                self.ws.run_forever(ping_interval=30, ping_timeout=10)
+            except Exception as e:
+                log.error(f'WebSocket price feed failed: {e}')
+
+            # If we get here, WS disconnected. Retry with backoff.
+            if attempt < max_retries - 1:
+                wait = 5 * (attempt + 1)
+                log.info(f'WebSocket reconnecting in {wait}s (attempt {attempt + 2}/{max_retries})...')
+                time.sleep(wait)
+            else:
+                log.error(f'WebSocket gave up after {max_retries} attempts. Using REST fallback.')
 
     def subscribe(self, scrip_codes):
         """Subscribe to LTP updates for given scrip codes."""
@@ -768,6 +774,10 @@ class BasketTrader:
         scrip_codes = [api.SCRIP_CODES[sym] for sym in self.positions if sym in api.SCRIP_CODES]
         self.price_feed.subscribe(scrip_codes)
 
+        # Timeout: if no price updates for 5 minutes, force close
+        last_price_time = time.time()
+        MAX_NO_PRICE_SECS = 300  # 5 minutes without any price = something is wrong
+
         while self.positions:
             try:
                 for sym in list(self.positions.keys()):
@@ -818,6 +828,15 @@ class BasketTrader:
 
                     if should_exit:
                         self.exit_position(sym, price, exit_reason)
+
+                    if price > 0:
+                        last_price_time = time.time()
+
+                # Safety: if no price for 5 min, force close everything
+                if time.time() - last_price_time > MAX_NO_PRICE_SECS:
+                    log.error('NO PRICE UPDATES for 5 minutes — force closing all positions')
+                    self.close_all()
+                    break
 
                 # Small sleep to prevent CPU spinning, but much faster than 2-sec polling
                 time.sleep(0.1)
@@ -928,12 +947,18 @@ class BasketTrader:
             log.warning('Pairs trader module not available, skipping')
             return
 
+        # Time guard: only run pairs between 9:25 and 10:00
+        now = datetime.now()
+        too_late = now.replace(hour=10, minute=0, second=0, microsecond=0)
+        if now > too_late:
+            log.info(f'Past 10:00 AM — skipping pairs session (too late)')
+            return
+
         log.info('='*60)
         log.info('SESSION 2: PAIRS TRADING')
         log.info('='*60)
 
         # Wait until 9:30
-        now = datetime.now()
         pairs_start = now.replace(hour=9, minute=30, second=0, microsecond=0)
         if now < pairs_start:
             wait = (pairs_start - now).total_seconds()
