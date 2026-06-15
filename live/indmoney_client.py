@@ -9,31 +9,36 @@ from . import config
 log = logging.getLogger('indmoney')
 
 BASE = 'https://api.indstocks.com'
-TOKEN_FILE = Path(config.DATA_DIR.parent / 'data' / 'indmoney_token.txt')
+TOKEN_FILE = Path(__file__).parent.parent / 'data' / 'indmoney_token.txt'
 
-# Scrip code mapping: NIFTY 50 stocks
+# Scrip code mapping: NIFTY 50 stocks (51 total — full index + UPL)
+# NOTE: Scrip codes need verification from INDstocks instrument master on first run.
+# Format: NSE_{security_id} — fetch from GET /market/instruments?source=equity
 SCRIP_CODES = {
     'ADANIENT': 'NSE_25', 'ADANIPORTS': 'NSE_15083',
     'APOLLOHOSP': 'NSE_18365', 'ASIANPAINT': 'NSE_236',
     'AXISBANK': 'NSE_5900', 'BAJAJ-AUTO': 'NSE_16669',
+    'BAJFINANCE': 'NSE_317', 'BAJAJFINSV': 'NSE_16675',
     'BPCL': 'NSE_526', 'BHARTIARTL': 'NSE_10604',
     'BRITANNIA': 'NSE_547', 'CIPLA': 'NSE_694',
     'COALINDIA': 'NSE_20374', 'DIVISLAB': 'NSE_10940',
-    'EICHERMOT': 'NSE_910', 'GRASIM': 'NSE_1232',
-    'HCLTECH': 'NSE_7229', 'HDFCBANK': 'NSE_1333',
-    'HDFCLIFE': 'NSE_467', 'HEROMOTOCO': 'NSE_1348',
-    'HINDALCO': 'NSE_1363', 'HINDUNILVR': 'NSE_1394',
-    'ICICIBANK': 'NSE_4963', 'ITC': 'NSE_1660',
-    'INDUSINDBK': 'NSE_5258', 'INFY': 'NSE_1594',
-    'JSWSTEEL': 'NSE_11723', 'LT': 'NSE_11483',
+    'DRREDDY': 'NSE_881', 'EICHERMOT': 'NSE_910',
+    'GRASIM': 'NSE_1232', 'HCLTECH': 'NSE_7229',
+    'HDFCBANK': 'NSE_1333', 'HDFCLIFE': 'NSE_467',
+    'HEROMOTOCO': 'NSE_1348', 'HINDALCO': 'NSE_1363',
+    'HINDUNILVR': 'NSE_1394', 'ICICIBANK': 'NSE_4963',
+    'ITC': 'NSE_1660', 'INDUSINDBK': 'NSE_5258',
+    'INFY': 'NSE_1594', 'JSWSTEEL': 'NSE_11723',
+    'KOTAKBANK': 'NSE_1922', 'LT': 'NSE_11483',
     'M&M': 'NSE_2031', 'MARUTI': 'NSE_10999',
     'NTPC': 'NSE_11630', 'NESTLEIND': 'NSE_17963',
     'ONGC': 'NSE_2475', 'POWERGRID': 'NSE_14977',
     'RELIANCE': 'NSE_2885', 'SBILIFE': 'NSE_21808',
-    'SBIN': 'NSE_3045', 'SUNPHARMA': 'NSE_3351',
-    'TCS': 'NSE_11536', 'TATACONSUM': 'NSE_3432',
-    'TATAMOTORS': 'NSE_3456', 'TATASTEEL': 'NSE_3499',
-    'TECHM': 'NSE_13538', 'TITAN': 'NSE_3506',
+    'SBIN': 'NSE_3045', 'SHRIRAMFIN': 'NSE_3103',
+    'SUNPHARMA': 'NSE_3351', 'TCS': 'NSE_11536',
+    'TATACONSUM': 'NSE_3432', 'TATAMOTORS': 'NSE_3456',
+    'TATASTEEL': 'NSE_3499', 'TECHM': 'NSE_13538',
+    'TITAN': 'NSE_3506', 'TRENT': 'NSE_3584',
     'UPL': 'NSE_11287', 'ULTRACEMCO': 'NSE_11532',
     'WIPRO': 'NSE_3787',
 }
@@ -268,12 +273,12 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price,
     return None
 
 
-def cancel_order(order_id):
+def cancel_order(order_id, segment='EQUITY'):
     """Cancel an order."""
     try:
         r = requests.post(f'{BASE}/order/cancel',
                          headers=headers(),
-                         json={'order_id': str(order_id)},
+                         json={'order_id': str(order_id), 'segment': segment},
                          timeout=10)
         if r.status_code == 200:
             log.info(f'Order cancelled: {order_id}')
@@ -284,13 +289,14 @@ def cancel_order(order_id):
     return False
 
 
-def get_positions():
-    """Get open positions."""
+def get_positions(product='intraday'):
+    """Get open positions. product: intraday, cnc."""
     try:
-        r = requests.get(f'{BASE}/portfolio/positions?segment=EQUITY',
+        r = requests.get(f'{BASE}/portfolio/positions?segment=equity&product={product}',
                         headers=headers(), timeout=10)
         if r.status_code == 200:
-            return r.json().get('data', [])
+            data = r.json().get('data', {})
+            return data.get('net_positions', [])
     except Exception as e:
         log.error(f'Positions error: {e}')
     return []
