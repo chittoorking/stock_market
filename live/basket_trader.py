@@ -476,11 +476,23 @@ class BasketTrader:
         for sym in ALL_STOCKS:
             candles = api.get_historical_candles(sym, '1day', start_ts, end_ts)
             if candles:
-                self.daily_history[sym] = [
-                    {'timestamp': c[0], 'open': c[1], 'high': c[2],
-                     'low': c[3], 'close': c[4], 'volume': c[5]}
-                    for c in candles
-                ][-30:]
+                parsed = []
+                for c in candles:
+                    if isinstance(c, dict):
+                        parsed.append({
+                            'timestamp': c.get('ts', c.get('timestamp', 0)),
+                            'open': c.get('o', c.get('open', 0)),
+                            'high': c.get('h', c.get('high', 0)),
+                            'low': c.get('l', c.get('low', 0)),
+                            'close': c.get('c', c.get('close', 0)),
+                            'volume': c.get('v', c.get('volume', 0)),
+                        })
+                    elif isinstance(c, (list, tuple)) and len(c) >= 6:
+                        parsed.append({
+                            'timestamp': c[0], 'open': c[1], 'high': c[2],
+                            'low': c[3], 'close': c[4], 'volume': c[5],
+                        })
+                self.daily_history[sym] = parsed[-30:]
             time.sleep(0.1)
 
         log.info(f'Loaded {len(self.prev_close)} stocks, '
