@@ -96,28 +96,33 @@ def get_full_quote(syms):
     if not scrips:
         return {}
     result = {}
-    keys = ','.join(scrips)
-    try:
-        r = requests.get(f'{BASE}/market/quotes/full?scrip-codes={keys}',
-                        headers=headers(), timeout=15)
-        if r.status_code == 200:
-            data = r.json().get('data', {})
-            for scrip, val in data.items():
-                sym = SYM_FROM_SCRIP.get(scrip)
-                if sym:
-                    result[sym] = {
-                        'last_price': val.get('live_price', 0),
-                        'open': val.get('day_open', 0),
-                        'high': val.get('day_high', 0),
-                        'low': val.get('day_low', 0),
-                        'prev_close': val.get('prev_close', 0),
-                        'volume': val.get('volume', 0),
-                        'upper_circuit': val.get('upper_circuit', 0),
-                        'lower_circuit': val.get('lower_circuit', 0),
-                        'market_depth': val.get('market_depth', {}),
-                    }
-    except Exception as e:
-        log.error(f'Full quote error: {e}')
+    # Batch in groups of 15 to avoid URL length limits
+    batch_size = 15
+    for batch_start in range(0, len(scrips), batch_size):
+        batch = scrips[batch_start:batch_start + batch_size]
+        keys = ','.join(batch)
+        try:
+            r = requests.get(f'{BASE}/market/quotes/full?scrip-codes={keys}',
+                            headers=headers(), timeout=15)
+            if r.status_code == 200:
+                data = r.json().get('data', {})
+                for scrip, val in data.items():
+                    sym = SYM_FROM_SCRIP.get(scrip)
+                    if sym:
+                        result[sym] = {
+                            'last_price': val.get('live_price', 0),
+                            'open': val.get('day_open', 0),
+                            'high': val.get('day_high', 0),
+                            'low': val.get('day_low', 0),
+                            'prev_close': val.get('prev_close', 0),
+                            'volume': val.get('volume', 0),
+                            'upper_circuit': val.get('upper_circuit', 0),
+                            'lower_circuit': val.get('lower_circuit', 0),
+                            'market_depth': val.get('market_depth', {}),
+                        }
+        except Exception as e:
+            log.error(f'Full quote batch error: {e}')
+        time.sleep(0.2)  # rate limit between batches
     return result
 
 
