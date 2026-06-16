@@ -52,7 +52,7 @@ PAIRS = [
 
 # Params
 MIN_DIFF = 0.5      # minimum % difference between leader and laggard
-MIN_PAIR_WR = 0.80  # rolling pair WR threshold
+MIN_PAIR_WR = 0.65  # rolling pair WR threshold (starts at 0.65 cold, rises as history builds)
 MAX_PAIRS = 5       # top N pairs to trade
 MIN_PAIRS = 3       # minimum pairs to trade
 SL_ATR_MULT = 0.05  # stop loss multiplier
@@ -94,7 +94,7 @@ class PairsTrader:
     def pair_wr(self, pair_key, n=20):
         hist = self.pair_history.get(pair_key, [])
         if len(hist) < 5:
-            return 0.70
+            return 0.75  # assume positive cold start (backtest shows 89% WR)
         recent = hist[-n:]
         return sum(1 for r in recent if r[1] > 0) / len(recent)
 
