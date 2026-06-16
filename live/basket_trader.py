@@ -299,6 +299,7 @@ class BasketTrader:
         self.positions = {}
         self.daily_pnl = 0.0
         self.daily_trades = []
+        self.flip_candidates = {}   # sym → flip metadata after pure SL hit
 
         # Data
         self.prev_close = {}
@@ -883,6 +884,11 @@ class BasketTrader:
                 if int(time.time()) % 10 == 0 and self.positions:
                     self._print_live_pnl()
 
+                # [FEATURE 7] Flip monitor — check at each 5-min bar boundary
+                now = datetime.now()
+                if now.second < 2 and now.minute % 5 == 0 and self.flip_candidates:
+                    self._check_flip_entries()
+
             except KeyboardInterrupt:
                 log.warning('Keyboard interrupt — closing all')
                 self.close_all()
@@ -890,6 +896,82 @@ class BasketTrader:
             except Exception as e:
                 log.error(f'Monitor error: {e}')
                 time.sleep(1)
+
+    # ═══════════════════════════════════════════════════════════
+    # [FEATURE 7] FLIP ON PURE SL — bar-close confirmation
+    # ═══════════════════════════════════════════════════════════
+
+    def _check_flip_entries(self):
+        """At each 5-min bar boundary: check if any SL-stopped stock confirmed flip direction."""
+        now = datetime.now()
+        # No flips after 2:30 PM — not enough time to trail
+        if now.hour > 14 or (now.hour == 14 and now.minute >= 30):
+            self.flip_candidates.clear()
+            return
+
+        to_remove = []
+        for sym, fc in list(self.flip_candidates.items()):
+            # Skip if already in a position (re-entered by another signal)
+            if sym in self.positions:
+                to_remove.append(sym)
+                continue
+
+            price = self.price_feed.get_ltp(sym)
+            if price <= 0:
+                continue
+
+            fc['bars_watched'] += 1
+
+            # Check if this bar closed in flip direction vs previous bar close
+            prev_close = fc['sl_bar_close']
+            flip_dir = fc['flip_dir']
+            confirmed = (price < prev_close) if flip_dir == 'SELL' else (price > prev_close)
+
+            if confirmed:
+                # Enter flip trade at current price (next bar open)
+                atr_p = fc['atr_pct']
+                sl_abs = atr_p * SL_ATR_MULT / 100 * price
+                trail_pct = max(atr_p * TRAIL_ATR_MULT, MIN_TRAIL_PCT)
+                sl_price = (price + sl_abs) if flip_dir == 'SELL' else (price - sl_abs)
+                capital = fc['capital']
+                qty = int(capital / price)
+
+                if qty > 0:
+                    if self.paper_mode:
+                        log.info(f'[PAPER][FLIP] {flip_dir} {qty} {sym} @ Rs {price:.2f} '
+                                 f'(SL={sl_price:.2f}, flip after bar confirm)')
+                    else:
+                        oid = api.place_order(sym, qty, flip_dir, price, order_type='MARKET')
+                        if oid is None:
+                            log.error(f'[FLIP] Failed to enter {sym}')
+                            to_remove.append(sym)
+                            continue
+
+                    self.positions[sym] = {
+                        'direction': flip_dir,
+                        'entry': price,
+                        'qty': qty,
+                        'sl_price': sl_price,
+                        'trail_pct': trail_pct,
+                        'trail_active': False,
+                        'trail_level': sl_price,
+                        'mfe': 0.0,
+                        'atr_pct': atr_p,
+                        'gap': 0,  # flip trade, no gap
+                        'is_flip': True,
+                    }
+                    log.info(f'[FLIP] {sym}: {flip_dir} entered @ Rs {price:.2f} after {fc["bars_watched"]} bars')
+                to_remove.append(sym)
+            else:
+                # Update bar close for next comparison
+                fc['sl_bar_close'] = price
+                # Expire after 6 bars (~30 min) if no confirmation
+                if fc['bars_watched'] >= 6:
+                    log.info(f'[FLIP] {sym}: no confirmation after 6 bars — dropping')
+                    to_remove.append(sym)
+
+        for sym in to_remove:
+            self.flip_candidates.pop(sym, None)
 
     # ═══════════════════════════════════════════════════════════
     # [FEATURE 6] REAL-TIME P&L
@@ -964,6 +1046,21 @@ class BasketTrader:
             self.fill_history[sym] = []
         self.fill_history[sym].append([self.today, pnl_pct])
         self.fill_history[sym] = self.fill_history[sym][-50:]
+
+        # Register flip candidate if pure SL hit (MFE < 0.05% — never moved in our favor)
+        if 'STOP' in reason and pos.get('mfe', 1.0) < 0.05:
+            flip_dir = 'BUY' if direction == 'SELL' else 'SELL'
+            self.flip_candidates[sym] = {
+                'flip_dir': flip_dir,
+                'sl_price': exit_price,
+                'sl_bar_close': exit_price,   # updated at next bar boundary
+                'atr_pct': pos.get('atr_pct', 0.5),
+                'trail_pct': pos.get('trail_pct', MIN_TRAIL_PCT),
+                'capital': entry * qty,
+                'confirmed': False,
+                'bars_watched': 0,
+            }
+            log.info(f'[FLIP] {sym} pure SL hit — watching for {flip_dir} confirmation next bar')
 
         del self.positions[sym]
 
