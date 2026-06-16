@@ -940,6 +940,13 @@ class BasketTrader:
             confirmed = (price < prev_close) if flip_dir == 'SELL' else (price > prev_close)
 
             if confirmed:
+                # Real order book filter — skip if depth strongly against flip direction
+                depth_score = self.get_depth_score(sym, flip_dir)
+                if depth_score == 0:
+                    log.info(f'[FLIP] {sym}: order book against {flip_dir} — skipping')
+                    to_remove.append(sym)
+                    continue
+
                 # Enter flip trade at current price (next bar open)
                 atr_p = fc['atr_pct']
                 sl_abs = atr_p * SL_ATR_MULT / 100 * price
@@ -951,7 +958,7 @@ class BasketTrader:
                 if qty > 0:
                     if self.paper_mode:
                         log.info(f'[PAPER][FLIP] {flip_dir} {qty} {sym} @ Rs {price:.2f} '
-                                 f'(SL={sl_price:.2f}, flip after bar confirm)')
+                                 f'(SL={sl_price:.2f}, depth={depth_score:.2f})')
                     else:
                         oid = api.place_order(sym, qty, flip_dir, price, order_type='MARKET')
                         if oid is None:
@@ -1060,27 +1067,22 @@ class BasketTrader:
         self.fill_history[sym] = self.fill_history[sym][-50:]
 
         # Register flip candidate if pure SL hit (MFE < 0.05% — never moved in our favor)
+        # No filter — backtest shows unfiltered gives Rs+523/day vs Rs+136 filtered
+        # 65% WR, AvgRs+271, charges ~Rs80 → net Rs+191/flip, 1.93 flips/day
         if 'STOP' in reason and pos.get('mfe', 1.0) < 0.05:
             flip_dir = 'BUY' if direction == 'SELL' else 'SELL'
             atr_p = pos.get('atr_pct', 0.0)
-            bar1_r = pos.get('bar1_range', 0.0)
-            # High-conviction filter: only queue if ATR>=0.5% AND bar1_range>=2%
-            # (backtest: WR=74%, AvgRs=+549 vs 65% WR unfiltered)
-            if atr_p >= 0.5 and bar1_r >= 2.0:
-                self.flip_candidates[sym] = {
-                    'flip_dir': flip_dir,
-                    'sl_price': exit_price,
-                    'sl_bar_close': exit_price,   # updated at next bar boundary
-                    'atr_pct': atr_p,
-                    'bar1_range': bar1_r,
-                    'trail_pct': pos.get('trail_pct', MIN_TRAIL_PCT),
-                    'capital': entry * qty,
-                    'confirmed': False,
-                    'bars_watched': 0,
-                }
-                log.info(f'[FLIP] {sym} pure SL hit — queued {flip_dir} (ATR={atr_p:.2f}% bar1={bar1_r:.2f}%)')
-            else:
-                log.debug(f'[FLIP] {sym} SL hit but skipped (ATR={atr_p:.2f}% bar1={bar1_r:.2f}% — need >=0.5% + >=2%)')
+            self.flip_candidates[sym] = {
+                'flip_dir': flip_dir,
+                'sl_price': exit_price,
+                'sl_bar_close': exit_price,   # updated at next bar boundary
+                'atr_pct': atr_p,
+                'trail_pct': pos.get('trail_pct', MIN_TRAIL_PCT),
+                'capital': entry * qty,
+                'confirmed': False,
+                'bars_watched': 0,
+            }
+            log.info(f'[FLIP] {sym} pure SL hit — queued {flip_dir}')
 
         del self.positions[sym]
 
