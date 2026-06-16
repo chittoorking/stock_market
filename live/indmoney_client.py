@@ -38,7 +38,7 @@ SCRIP_CODES = {
     'SUNPHARMA': 'NSE_3351', 'TCS': 'NSE_11536',
     'TATACONSUM': 'NSE_3432', 'TATAMOTORS': 'NSE_3456',
     'TATASTEEL': 'NSE_3499', 'TECHM': 'NSE_13538',
-    'TITAN': 'NSE_3506', 'TRENT': 'NSE_3584',
+    'TITAN': 'NSE_3506',  # TRENT: not available on INDstocks
     'UPL': 'NSE_11287', 'ULTRACEMCO': 'NSE_11532',
     'WIPRO': 'NSE_3787',
 }
