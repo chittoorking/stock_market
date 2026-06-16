@@ -794,6 +794,8 @@ class BasketTrader:
                 'sl_price': sl_price, 'mfe': 0.0,
                 'trail_active': False, 'trail_level': trail_level,
                 'order_id': order_id, 'gap': c['gap'], 'score': c['score'],
+                'atr_pct': c['atr_pct'],
+                'bar1_high': entry, 'bar1_low': entry, 'bar1_range': 0.0,
             }
 
         log.info(f'Entered {len(self.positions)} positions')
@@ -838,6 +840,16 @@ class BasketTrader:
                         fav = (price - entry) / entry * 100
 
                     pos['mfe'] = max(pos['mfe'], fav)
+
+                    # Track bar1 range (first 5 min, 9:15–9:20)
+                    if not pos.get('bar1_done'):
+                        now_t = datetime.now()
+                        pos['bar1_high'] = max(pos.get('bar1_high', price), price)
+                        pos['bar1_low'] = min(pos.get('bar1_low', price), price)
+                        if now_t.hour == 9 and now_t.minute >= 20:
+                            ep = pos['entry']
+                            pos['bar1_range'] = (pos['bar1_high'] - pos['bar1_low']) / ep * 100 if ep > 0 else 0.0
+                            pos['bar1_done'] = True
 
                     # Trail logic
                     if pos['mfe'] > pos['trail_pct']:
@@ -1050,17 +1062,25 @@ class BasketTrader:
         # Register flip candidate if pure SL hit (MFE < 0.05% — never moved in our favor)
         if 'STOP' in reason and pos.get('mfe', 1.0) < 0.05:
             flip_dir = 'BUY' if direction == 'SELL' else 'SELL'
-            self.flip_candidates[sym] = {
-                'flip_dir': flip_dir,
-                'sl_price': exit_price,
-                'sl_bar_close': exit_price,   # updated at next bar boundary
-                'atr_pct': pos.get('atr_pct', 0.5),
-                'trail_pct': pos.get('trail_pct', MIN_TRAIL_PCT),
-                'capital': entry * qty,
-                'confirmed': False,
-                'bars_watched': 0,
-            }
-            log.info(f'[FLIP] {sym} pure SL hit — watching for {flip_dir} confirmation next bar')
+            atr_p = pos.get('atr_pct', 0.0)
+            bar1_r = pos.get('bar1_range', 0.0)
+            # High-conviction filter: only queue if ATR>=0.5% AND bar1_range>=2%
+            # (backtest: WR=74%, AvgRs=+549 vs 65% WR unfiltered)
+            if atr_p >= 0.5 and bar1_r >= 2.0:
+                self.flip_candidates[sym] = {
+                    'flip_dir': flip_dir,
+                    'sl_price': exit_price,
+                    'sl_bar_close': exit_price,   # updated at next bar boundary
+                    'atr_pct': atr_p,
+                    'bar1_range': bar1_r,
+                    'trail_pct': pos.get('trail_pct', MIN_TRAIL_PCT),
+                    'capital': entry * qty,
+                    'confirmed': False,
+                    'bars_watched': 0,
+                }
+                log.info(f'[FLIP] {sym} pure SL hit — queued {flip_dir} (ATR={atr_p:.2f}% bar1={bar1_r:.2f}%)')
+            else:
+                log.debug(f'[FLIP] {sym} SL hit but skipped (ATR={atr_p:.2f}% bar1={bar1_r:.2f}% — need >=0.5% + >=2%)')
 
         del self.positions[sym]
 
