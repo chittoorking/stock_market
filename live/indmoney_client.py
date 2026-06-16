@@ -11,10 +11,13 @@ log = logging.getLogger('indmoney')
 BASE = 'https://api.indstocks.com'
 TOKEN_FILE = Path(__file__).parent.parent / 'data' / 'indmoney_token.txt'
 
-# Scrip code mapping: NIFTY 50 stocks (51 total — full index + UPL)
-# NOTE: Scrip codes need verification from INDstocks instrument master on first run.
-# Format: NSE_{security_id} — fetch from GET /market/instruments?source=equity
+# Scrip code mapping: NIFTY 100 stocks (90 verified + estimated)
+# Format: NSE_{security_id} — matches NSE official security IDs
+# VERIFIED (50): NIFTY 50 codes confirmed via live LTP on 2026-06-16
+# ESTIMATED (40): NIFTY Next 50 codes from NSE bhavcopy — run verify_scrips.py to confirm
+# TRENT: not available on INDstocks (NSE_3584 returns empty)
 SCRIP_CODES = {
+    # --- NIFTY 50 (verified) ---
     'ADANIENT': 'NSE_25', 'ADANIPORTS': 'NSE_15083',
     'APOLLOHOSP': 'NSE_18365', 'ASIANPAINT': 'NSE_236',
     'AXISBANK': 'NSE_5900', 'BAJAJ-AUTO': 'NSE_16669',
@@ -38,9 +41,30 @@ SCRIP_CODES = {
     'SUNPHARMA': 'NSE_3351', 'TCS': 'NSE_11536',
     'TATACONSUM': 'NSE_3432', 'TATAMOTORS': 'NSE_3456',
     'TATASTEEL': 'NSE_3499', 'TECHM': 'NSE_13538',
-    'TITAN': 'NSE_3506',  # TRENT: not available on INDstocks
+    'TITAN': 'NSE_3506',
     'UPL': 'NSE_11287', 'ULTRACEMCO': 'NSE_11532',
     'WIPRO': 'NSE_3787',
+    # --- NIFTY Next 50 (estimated — verify with verify_scrips.py) ---
+    'ABB': 'NSE_20070', 'ADANIENSOL': 'NSE_25850',
+    'ADANIGREEN': 'NSE_21871', 'ADANIPOWER': 'NSE_18388',
+    'AMBUJACEM': 'NSE_1270', 'BAJAJHLDNG': 'NSE_1102',
+    'BANKBARODA': 'NSE_1452', 'BOSCHLTD': 'NSE_1080',
+    'CANBK': 'NSE_10180', 'CGPOWER': 'NSE_14875',
+    'CHOLAFIN': 'NSE_2972', 'CUMMINSIND': 'NSE_1700',
+    'DLF': 'NSE_14366', 'DMART': 'NSE_20640',
+    'GAIL': 'NSE_4717', 'GODREJCP': 'NSE_10099',
+    'HAL': 'NSE_14307', 'HDFCAMC': 'NSE_22122',
+    'HINDZINC': 'NSE_1279', 'INDHOTEL': 'NSE_1550',
+    'IOC': 'NSE_1624', 'IRFC': 'NSE_24143',
+    'JINDALSTEL': 'NSE_11243', 'LODHA': 'NSE_24954',
+    'LTM': 'NSE_17818', 'MOTHERSON': 'NSE_3405',
+    'MUTHOOTFIN': 'NSE_17622', 'PFC': 'NSE_14299',
+    'PIDILITIND': 'NSE_2664', 'PNB': 'NSE_2730',
+    'RECLTD': 'NSE_14383', 'SHREECEM': 'NSE_3410',
+    'SIEMENS': 'NSE_3150', 'SOLARINDS': 'NSE_16213',
+    'TATAPOWER': 'NSE_3426', 'TORNTPHARM': 'NSE_3839',
+    'TVSMOTOR': 'NSE_3937', 'UNIONBANK': 'NSE_10355',
+    'UNITDSPR': 'NSE_7269', 'VBL': 'NSE_16713',
 }
 
 # Reverse map

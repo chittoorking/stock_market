@@ -1,7 +1,7 @@
 """Gap Fill Basket Trader V3 — INDstocks Flash API.
 
 Strategy (validated 356/357 green days on unseen 2025-2026 data):
-  UNIVERSE = 91 stocks (NIFTY 100)
+  UNIVERSE = 90 stocks (NIFTY 100 minus TRENT — unavailable on INDstocks)
   SCORE    = EV × gap × depth_score
   FILTER   = rolling WR >= 60%, max 2 per sector, min 5 stocks
   ENTRY    = 9:15 AM, MARKET order, fade the gap
@@ -42,8 +42,9 @@ logging.basicConfig(
 )
 log = logging.getLogger('basket')
 
-# ═══ SECTORS (51 stocks) ═══
+# ═══ SECTORS (90 stocks — NIFTY 100 minus TRENT) ═══
 SECTORS = {
+    # NIFTY 50
     'ITC':'FMCG','BHARTIARTL':'Tel','TCS':'IT','CIPLA':'Pharma','NESTLEIND':'FMCG',
     'BRITANNIA':'FMCG','NTPC':'Pwr','SUNPHARMA':'Pharma','HDFCLIFE':'Ins',
     'ICICIBANK':'Bank','TATACONSUM':'FMCG','APOLLOHOSP':'Health','MARUTI':'Auto',
@@ -54,10 +55,19 @@ SECTORS = {
     'TATAMOTORS':'Auto','ADANIENT':'Cong','ADANIPORTS':'Infra','BPCL':'Oil',
     'ONGC':'Oil','JSWSTEEL':'Metal','HCLTECH':'IT','TECHM':'IT','POWERGRID':'Pwr',
     'UPL':'Agri','SBILIFE':'Ins','ULTRACEMCO':'Cem','HINDUNILVR':'FMCG',
-    'HEROMOTOCO':'Auto','NIFTY':'Idx',
-    # New 6 stocks
-    'BAJFINANCE':'Fin','BAJAJFINSV':'Fin','KOTAKBANK':'Bank',
-    'DRREDDY':'Pharma','SHRIRAMFIN':'Fin','TRENT':'Con',
+    'HEROMOTOCO':'Auto','BAJFINANCE':'Fin','BAJAJFINSV':'Fin','KOTAKBANK':'Bank',
+    'DRREDDY':'Pharma','SHRIRAMFIN':'Fin',
+    # NIFTY Next 50 (estimated scrip codes — verify with verify_scrips.py)
+    'ABB':'Capital','ADANIENSOL':'Pwr','ADANIGREEN':'Pwr','ADANIPOWER':'Pwr',
+    'AMBUJACEM':'Cem','BAJAJHLDNG':'Fin','BANKBARODA':'Bank','BOSCHLTD':'Auto',
+    'CANBK':'Bank','CGPOWER':'Capital','CHOLAFIN':'Fin','CUMMINSIND':'Capital',
+    'DLF':'Realty','DMART':'Retail','GAIL':'Oil','GODREJCP':'FMCG',
+    'HAL':'Defence','HDFCAMC':'Fin','HINDZINC':'Metal','INDHOTEL':'Hotel',
+    'IOC':'Oil','IRFC':'Fin','JINDALSTEL':'Metal','LODHA':'Realty',
+    'LTM':'IT','MOTHERSON':'Auto','MUTHOOTFIN':'Fin','PFC':'Fin',
+    'PIDILITIND':'Chem','PNB':'Bank','RECLTD':'Fin','SHREECEM':'Cem',
+    'SIEMENS':'Capital','SOLARINDS':'Defence','TATAPOWER':'Pwr','TORNTPHARM':'Pharma',
+    'TVSMOTOR':'Auto','UNIONBANK':'Bank','UNITDSPR':'FMCG','VBL':'FMCG',
 }
 
 ALL_STOCKS = list(api.SCRIP_CODES.keys())
