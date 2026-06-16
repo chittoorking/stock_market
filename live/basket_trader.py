@@ -80,6 +80,7 @@ MIN_BASKET = 5
 MAX_BASKET = 10
 SL_ATR_MULT = 0.05
 TRAIL_ATR_MULT = 0.005
+MIN_TRAIL_PCT = 0.10  # floor: never trail tighter than 0.1% (prevents sub-tick noise exits)
 LEVERAGE = 5
 CIRCUIT_MARGIN = 2.0  # skip stocks within 2% of circuit
 
@@ -292,6 +293,7 @@ class BasketTrader:
         self.capital = capital  # 0 = auto-fetch from broker
         self.total_capital = capital * LEVERAGE
         self.today = datetime.now().strftime('%Y-%m-%d')
+        self.capital_pool = None  # set after capital is known in run()
 
         # State
         self.positions = {}
@@ -448,6 +450,11 @@ class BasketTrader:
             self.capital = int(self.available_margin)
 
         self.total_capital = self.capital * LEVERAGE
+
+        # Initialize shared capital pool — all sessions draw from this
+        from .capital_pool import CapitalPool
+        self.capital_pool = CapitalPool(total_own=self.capital, leverage=LEVERAGE)
+        log.info(self.capital_pool.status())
 
         if self.capital < 20000:
             log.error(f'Capital Rs {self.capital:,} too low. Need at least Rs 20,000 for 5-stock basket.')
@@ -664,7 +671,7 @@ class BasketTrader:
             score = ev * abs(gap) * depth_score
 
             sl_pct = ind['atr_pct'] * SL_ATR_MULT
-            trail_pct = ind['atr_pct'] * TRAIL_ATR_MULT
+            trail_pct = max(ind['atr_pct'] * TRAIL_ATR_MULT, MIN_TRAIL_PCT)
 
             # gap/ATR = signal-to-noise ratio (for allocation later)
             gap_vs_atr = abs(gap) / ind['atr_pct'] if ind['atr_pct'] > 0 else 1
@@ -713,19 +720,28 @@ class BasketTrader:
     def enter_basket(self, basket):
         n = len(basket)
 
+        # Request capital from shared pool (caps to available if other sessions active)
+        per_stock = self.total_capital // n
+        if self.capital_pool:
+            per_stock = self.capital_pool.request('S1', n, per_stock)
+            if per_stock == 0:
+                log.error('Capital pool exhausted — cannot enter basket')
+                return
+
         # WR × gap/ATR weighted allocation (normalized to sum=1)
         raw_weights = [max(c['wr'] * c['gap_vs_atr'], 0.03) for c in basket]
         total_raw = sum(raw_weights)
         weights = [w / total_raw for w in raw_weights]
+        session_capital = per_stock * n
 
-        log.info(f'Entering {n} stocks:')
+        log.info(f'Entering {n} stocks (pool: Rs {session_capital:,}):')
         for c, w in zip(basket, weights):
-            log.info(f'  {c["sym"]:<12s} weight={w:.1%} = Rs {self.total_capital*w:,.0f}')
+            log.info(f'  {c["sym"]:<12s} weight={w:.1%} = Rs {session_capital*w:,.0f}')
 
         for c, w in zip(basket, weights):
             sym = c['sym']
             price = c['price']
-            pos_size = self.total_capital * w
+            pos_size = session_capital * w
             qty = int(pos_size / price)
             if qty <= 0:
                 continue
@@ -960,6 +976,8 @@ class BasketTrader:
             if price <= 0:
                 price = self.positions[sym]['entry']
             self.exit_position(sym, price, 'FORCE CLOSE')
+        if self.capital_pool:
+            self.capital_pool.release('S1', self.daily_pnl)
 
     def _run_pairs_session(self):
         """Session 2: Pairs trading after gap fill exits."""
@@ -1006,7 +1024,16 @@ class BasketTrader:
         except Exception:
             pass
 
-        pt = PairsTrader(self.total_capital, self.price_feed, self.order_feed,
+        # Request capital from shared pool for pairs (S2)
+        pairs_capital = self.total_capital
+        if self.capital_pool:
+            pairs_capital_per = self.capital_pool.request('S2', 5, self.total_capital // 5)
+            if pairs_capital_per == 0:
+                log.warning('Capital pool exhausted — skipping pairs session')
+                return
+            pairs_capital = pairs_capital_per * 5
+
+        pt = PairsTrader(pairs_capital, self.price_feed, self.order_feed,
                          self.paper_mode)
 
         # Pass ATR data
@@ -1029,6 +1056,9 @@ class BasketTrader:
                      f'({len(pt.daily_trades)} trades)')
         else:
             log.info('No pairs today.')
+
+        if self.capital_pool:
+            self.capital_pool.release('S2', pt.daily_pnl if pairs else 0)
 
     # ═══════════════════════════════════════════════════════════
     # JOURNAL
