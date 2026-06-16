@@ -147,19 +147,26 @@ def get_market_depth(syms):
                     if not sym:
                         continue
                     # Try multiple paths to find aggregate depth
+                    # API nests as: data.{scrip}.market_depth.{scrip}.aggregate
                     md = None
+                    depth_root = None
                     if isinstance(val, dict):
-                        # Path 1: val.market_depth.aggregate
-                        md = val.get('market_depth', {}).get('aggregate', {})
-                        # Path 2: val.{scrip}.aggregate (nested under scrip key)
-                        if not md or md.get('buy_percentage') is None:
-                            for k, v in val.items():
+                        mkt_depth = val.get('market_depth', {})
+                        # Path 1: market_depth.{scrip}.aggregate (double-nested)
+                        if isinstance(mkt_depth, dict):
+                            for k, v in mkt_depth.items():
                                 if isinstance(v, dict) and 'aggregate' in v:
                                     md = v.get('aggregate', {})
+                                    depth_root = v
                                     break
+                        # Path 2: market_depth.aggregate (single-nested)
+                        if not md or md.get('buy_percentage') is None:
+                            md = mkt_depth.get('aggregate', {})
+                            depth_root = mkt_depth
                         # Path 3: direct aggregate in val
                         if not md or md.get('buy_percentage') is None:
                             md = val.get('aggregate', {})
+                            depth_root = val
 
                     if not md:
                         md = {}
@@ -186,12 +193,9 @@ def get_market_depth(syms):
 
                     # Extract bid-ask spread from depth levels
                     spread_pct = 0
-                    depth_levels = val.get('market_depth', {}).get('depth', [])
-                    if not depth_levels:
-                        for k, v in val.items():
-                            if isinstance(v, dict) and 'depth' in v:
-                                depth_levels = v.get('depth', [])
-                                break
+                    depth_levels = []
+                    if depth_root and isinstance(depth_root, dict):
+                        depth_levels = depth_root.get('depth', [])
                     if depth_levels and len(depth_levels) > 0:
                         level0 = depth_levels[0]
                         bid_p = level0.get('buy', {}).get('price', 0)
