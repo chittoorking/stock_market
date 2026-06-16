@@ -454,7 +454,7 @@ class BasketTrader:
 
         # Initialize shared capital pool — all sessions draw from this
         from .capital_pool import CapitalPool
-        self.capital_pool = CapitalPool(total_own=self.capital, leverage=LEVERAGE)
+        self.capital_pool = CapitalPool(total_own=int(self.capital * 0.95), leverage=LEVERAGE)  # 5% buffer
         log.info(self.capital_pool.status())
 
         if self.capital < 20000:
@@ -722,7 +722,7 @@ class BasketTrader:
         n = len(basket)
 
         # Request capital from shared pool (caps to available if other sessions active)
-        per_stock = self.total_capital // n
+        per_stock = int(self.total_capital * 0.95) // n  # 5% buffer
         if self.capital_pool:
             per_stock = self.capital_pool.request('S1', n, per_stock)
             if per_stock == 0:
