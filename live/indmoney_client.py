@@ -127,29 +127,94 @@ def get_full_quote(syms):
 
 
 def get_market_depth(syms):
-    """Get market depth (order book). Returns {sym: {total_buy, total_sell, buy_pct, sell_pct}}."""
+    """Get market depth (order book). Returns {sym: {total_buy, total_sell, buy_pct, sell_pct, spread_pct}}."""
     scrips = [SCRIP_CODES[s] for s in syms if s in SCRIP_CODES]
     if not scrips:
         return {}
     result = {}
-    keys = ','.join(scrips)
-    try:
-        r = requests.get(f'{BASE}/market/quotes/mkt?scrip-codes={keys}',
-                        headers=headers(), timeout=15)
-        if r.status_code == 200:
-            data = r.json().get('data', {})
-            for scrip, val in data.items():
-                sym = SYM_FROM_SCRIP.get(scrip)
-                if sym:
-                    md = val.get('market_depth', {}).get('aggregate', {})
+    # Batch in groups of 15
+    batch_size = 15
+    for batch_start in range(0, len(scrips), batch_size):
+        batch = scrips[batch_start:batch_start + batch_size]
+        keys = ','.join(batch)
+        try:
+            r = requests.get(f'{BASE}/market/quotes/mkt?scrip-codes={keys}',
+                            headers=headers(), timeout=15)
+            if r.status_code == 200:
+                data = r.json().get('data', {})
+                for scrip, val in data.items():
+                    sym = SYM_FROM_SCRIP.get(scrip)
+                    if not sym:
+                        continue
+                    # Try multiple paths to find aggregate depth
+                    md = None
+                    if isinstance(val, dict):
+                        # Path 1: val.market_depth.aggregate
+                        md = val.get('market_depth', {}).get('aggregate', {})
+                        # Path 2: val.{scrip}.aggregate (nested under scrip key)
+                        if not md or md.get('buy_percentage') is None:
+                            for k, v in val.items():
+                                if isinstance(v, dict) and 'aggregate' in v:
+                                    md = v.get('aggregate', {})
+                                    break
+                        # Path 3: direct aggregate in val
+                        if not md or md.get('buy_percentage') is None:
+                            md = val.get('aggregate', {})
+
+                    if not md:
+                        md = {}
+
+                    # Parse percentages (may be float or string)
+                    bp = md.get('buy_percentage', 50)
+                    sp = md.get('sell_percentage', 50)
+                    if isinstance(bp, str):
+                        try: bp = float(bp.replace(',', ''))
+                        except: bp = 50
+                    if isinstance(sp, str):
+                        try: sp = float(sp.replace(',', ''))
+                        except: sp = 50
+
+                    # Parse totals (may have commas)
+                    tb = md.get('total_buy', 0)
+                    ts = md.get('total_sell', 0)
+                    if isinstance(tb, str):
+                        try: tb = int(tb.replace(',', ''))
+                        except: tb = 0
+                    if isinstance(ts, str):
+                        try: ts = int(ts.replace(',', ''))
+                        except: ts = 0
+
+                    # Extract bid-ask spread from depth levels
+                    spread_pct = 0
+                    depth_levels = val.get('market_depth', {}).get('depth', [])
+                    if not depth_levels:
+                        for k, v in val.items():
+                            if isinstance(v, dict) and 'depth' in v:
+                                depth_levels = v.get('depth', [])
+                                break
+                    if depth_levels and len(depth_levels) > 0:
+                        level0 = depth_levels[0]
+                        bid_p = level0.get('buy', {}).get('price', 0)
+                        ask_p = level0.get('sell', {}).get('price', 0)
+                        if isinstance(bid_p, str):
+                            try: bid_p = float(bid_p.replace(',', ''))
+                            except: bid_p = 0
+                        if isinstance(ask_p, str):
+                            try: ask_p = float(ask_p.replace(',', ''))
+                            except: ask_p = 0
+                        if bid_p > 0 and ask_p > 0:
+                            spread_pct = (ask_p - bid_p) / bid_p * 100
+
                     result[sym] = {
-                        'total_buy': md.get('total_buy', 0),
-                        'total_sell': md.get('total_sell', 0),
-                        'buy_pct': md.get('buy_percentage', 50),
-                        'sell_pct': md.get('sell_percentage', 50),
+                        'total_buy': tb,
+                        'total_sell': ts,
+                        'buy_pct': bp,
+                        'sell_pct': sp,
+                        'spread_pct': spread_pct,
                     }
-    except Exception as e:
-        log.error(f'Market depth error: {e}')
+        except Exception as e:
+            log.error(f'Market depth error: {e}')
+        time.sleep(0.2)
     return result
 
 
