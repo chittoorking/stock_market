@@ -729,13 +729,18 @@ class BasketTrader:
                 log.error('Capital pool exhausted — cannot enter basket')
                 return
 
-        # Top1 = 30%, remaining 9 split 70% equally
-        # Backtest: Rs+5,887/day, 99.9% win days, worst day Rs-44
-        # Rank#1 has 78% WR, 30:1 win:loss ratio — concentrating here is safe
-        TOP1_PCT = 0.30
+        # Tiered allocation: #1=30%, #2=15%, #3=10%, rest split equally
         session_capital = per_stock * n
-        rest_pct = (1 - TOP1_PCT) / (n - 1) if n > 1 else TOP1_PCT
-        weights = [TOP1_PCT] + [rest_pct] * (n - 1)
+        tier_pcts = [0.30, 0.15, 0.10]
+        fixed = sum(tier_pcts)           # 0.55
+        rest_n = max(n - len(tier_pcts), 0)
+        rest_each = (1 - fixed) / rest_n if rest_n > 0 else 0  # 0.45/7 = 6.43%
+        if n <= len(tier_pcts):
+            weights = (tier_pcts + [rest_each] * rest_n)[:n]
+            total = sum(weights)
+            weights = [w / total for w in weights]  # renormalize if fewer stocks
+        else:
+            weights = tier_pcts + [rest_each] * rest_n
 
         log.info(f'Entering {n} stocks (pool: Rs {session_capital:,}):')
         for c, w in zip(basket, weights):
