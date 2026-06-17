@@ -1235,11 +1235,20 @@ class BasketTrader:
             pass
 
         # Request capital from shared pool for pairs (S2)
+        # Wait for S1 (gap fill) to release capital if needed
         pairs_capital = self.total_capital
         if self.capital_pool:
-            pairs_capital_per = self.capital_pool.request('S2', 5, self.total_capital // 5)
+            for wait_attempt in range(20):  # wait up to 10 min (20 × 30s)
+                pairs_capital_per = self.capital_pool.request('S2', 5, self.total_capital // 5)
+                if pairs_capital_per > 0:
+                    break
+                if datetime.now().hour >= 10:
+                    log.warning('Past 10:00 AM — giving up waiting for capital')
+                    return
+                log.info(f'Capital pool busy (S1 active) — retry {wait_attempt+1}/20 in 30s...')
+                time.sleep(30)
             if pairs_capital_per == 0:
-                log.warning('Capital pool exhausted — skipping pairs session')
+                log.warning('Capital pool exhausted after waiting — skipping pairs')
                 return
             pairs_capital = pairs_capital_per * 5
 
