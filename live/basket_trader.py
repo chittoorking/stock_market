@@ -1339,18 +1339,24 @@ class BasketTrader:
 
         # Step 4: Scan + Score (includes market depth)
         basket = self.scan_gaps()
+
+        # Step 4b: Launch pairs session in background thread (runs at 9:30)
+        # Pairs runs independently regardless of gap fill basket
+        import threading
+        pairs_thread = threading.Thread(target=self._run_pairs_session, daemon=True)
+        pairs_thread.start()
+
         if not basket:
-            log.info('No basket today. Done.')
+            log.info('No gap fill basket today — waiting for pairs session only.')
+            pairs_thread.join(timeout=3600)  # wait up to 1 hour for pairs
             self.price_feed.stop()
+            self._save_fill_history()
+            self._update_all_fill_history()
+            self.write_journal()
             return
 
         # Step 5: Enter
         self.enter_basket(basket)
-
-        # Step 5b: Launch pairs session in background thread (runs at 9:30)
-        import threading
-        pairs_thread = threading.Thread(target=self._run_pairs_session, daemon=True)
-        pairs_thread.start()
 
         # Step 6: Monitor via WebSocket
         self.monitor_ws()
