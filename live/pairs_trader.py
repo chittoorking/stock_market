@@ -64,11 +64,12 @@ PAIR_HISTORY_FILE = DATA_DIR / 'pair_history.json'
 
 
 class PairsTrader:
-    def __init__(self, total_capital, price_feed, order_feed, paper_mode=True):
+    def __init__(self, total_capital, price_feed, order_feed, paper_mode=True, depth_fn=None):
         self.total_capital = total_capital
         self.price_feed = price_feed
         self.order_feed = order_feed
         self.paper_mode = paper_mode
+        self.depth_fn = depth_fn  # order book gate function
         self.today = datetime.now().strftime('%Y-%m-%d')
 
         self.positions = {}  # pair_key -> {laggard_pos, leader_pos}
@@ -209,6 +210,17 @@ class PairsTrader:
 
             if qty_lag <= 0 or qty_lead <= 0:
                 continue
+
+            # Order book gate — check both legs
+            if self.depth_fn:
+                lag_depth = self.depth_fn(laggard['sym'], 'BUY')
+                lead_depth = self.depth_fn(leader['sym'], 'SELL')
+                if lag_depth == 0:
+                    log.info(f'Pair {pair_key}: order book against BUY {laggard["sym"]} — skip')
+                    continue
+                if lead_depth == 0:
+                    log.info(f'Pair {pair_key}: order book against SELL {leader["sym"]} — skip')
+                    continue
 
             if self.paper_mode:
                 oid_lag = f'PAPER-{laggard["sym"]}-{int(time.time())}'

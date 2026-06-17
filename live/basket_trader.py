@@ -1277,7 +1277,7 @@ class BasketTrader:
             pairs_capital = pairs_capital_per * 5
 
         pt = PairsTrader(pairs_capital, self.price_feed, self.order_feed,
-                         self.paper_mode)
+                         self.paper_mode, depth_fn=self.get_depth_score)
 
         # Pass ATR data
         for sym in ALL_STOCKS:
