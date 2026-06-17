@@ -438,12 +438,28 @@ class BasketTrader:
                 'lower': q.get('lower_circuit', 0),
             }
 
-        # [FEATURE 3] Auto-detect capital from broker
+        # [FEATURE 3] Auto-detect capital from broker (retry until funds available)
         self.available_margin = api.get_funds()
         log.info(f'Available margin: Rs {self.available_margin:,.0f}')
 
+        if self.capital == 0 and self.available_margin == 0:
+            log.info('Funds = 0 (market closed?) — will retry at 9:10 AM')
+            from datetime import datetime as dt
+            target = dt.now().replace(hour=9, minute=10, second=0, microsecond=0)
+            now = dt.now()
+            if now < target:
+                wait = (target - now).total_seconds()
+                log.info(f'Sleeping {wait:.0f}s until 9:10 AM for funds retry...')
+                time.sleep(max(0, wait))
+            for attempt in range(10):
+                self.available_margin = api.get_funds()
+                if self.available_margin > 0:
+                    log.info(f'Funds detected: Rs {self.available_margin:,.0f} (attempt {attempt+1})')
+                    break
+                log.info(f'Funds still 0, retry {attempt+1}/10 in 30s...')
+                time.sleep(30)
+
         if self.capital == 0:
-            # Auto-detect: use whatever is available
             self.capital = max(int(self.available_margin), 0)
             log.info(f'Auto-detected capital: Rs {self.capital:,}')
         elif self.available_margin > 0 and self.available_margin < self.capital:
