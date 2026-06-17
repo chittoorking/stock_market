@@ -261,18 +261,27 @@ class OrderFeed:
             log.warning('WebSocket order feed: CLOSED')
             self._connected.clear()
 
-        try:
-            self.ws = websocket.WebSocketApp(
-                WS_ORDERS,
-                header={'Authorization': token},
-                on_open=on_open,
-                on_message=on_message,
-                on_error=on_error,
-                on_close=on_close,
-            )
-            self.ws.run_forever(ping_interval=30, ping_timeout=10)
-        except Exception as e:
-            log.error(f'WebSocket order feed failed: {e}')
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                self.ws = websocket.WebSocketApp(
+                    WS_ORDERS,
+                    header={'Authorization': token},
+                    on_open=on_open,
+                    on_message=on_message,
+                    on_error=on_error,
+                    on_close=on_close,
+                )
+                self.ws.run_forever(ping_interval=30, ping_timeout=10)
+            except Exception as e:
+                log.error(f'WebSocket order feed failed: {e}')
+
+            if attempt < max_retries - 1:
+                wait = 5 * (attempt + 1)
+                log.info(f'Order feed reconnecting in {wait}s (attempt {attempt + 2}/{max_retries})...')
+                time.sleep(wait)
+            else:
+                log.error(f'Order feed gave up after {max_retries} attempts.')
 
     def is_filled(self, order_id):
         with self._lock:
@@ -1060,17 +1069,26 @@ class BasketTrader:
         if self.paper_mode:
             log.info(f'[PAPER] EXIT {exit_side} {qty} {sym} @ Rs {exit_price:.2f} ({reason})')
         else:
-            oid = api.place_order(sym, qty, exit_side, exit_price, order_type='MARKET')
-            if oid is None:
-                log.error(f'FAILED to exit {sym} — MANUAL INTERVENTION NEEDED')
-                return
-            # [FEATURE 4] Wait for fill confirmation
-            for _ in range(10):
-                if self.order_feed.is_filled(oid):
+            # Retry exit up to 3 times
+            oid = None
+            for attempt in range(3):
+                oid = api.place_order(sym, qty, exit_side, exit_price, order_type='MARKET')
+                if oid is not None:
                     break
-                time.sleep(0.2)
-            if not self.order_feed.is_filled(oid):
-                log.warning(f'{sym} exit order {oid} not confirmed as filled')
+                log.error(f'Exit {sym} attempt {attempt+1}/3 failed, retrying...')
+                time.sleep(1)
+            if oid is None:
+                log.error(f'FAILED to exit {sym} after 3 attempts — removing from tracking anyway')
+                # Still remove from positions to avoid infinite retry loop
+                # Position may still be open on broker — log for manual check
+            else:
+                # [FEATURE 4] Wait for fill confirmation
+                for _ in range(10):
+                    if self.order_feed.is_filled(oid):
+                        break
+                    time.sleep(0.2)
+                if not self.order_feed.is_filled(oid):
+                    log.warning(f'{sym} exit order {oid} not confirmed as filled')
 
         if direction == 'SELL':
             pnl_pct = (entry - exit_price) / entry * 100
@@ -1126,6 +1144,22 @@ class BasketTrader:
             if price <= 0:
                 price = self.positions[sym]['entry']
             self.exit_position(sym, price, 'FORCE CLOSE')
+
+        # Verify no positions remain on broker (safety net)
+        if not self.paper_mode:
+            time.sleep(2)
+            try:
+                broker_positions = api.get_positions()
+                if broker_positions:
+                    open_syms = [p.get('symbol', '?') for p in broker_positions
+                                 if abs(p.get('quantity', 0)) > 0]
+                    if open_syms:
+                        log.error(f'POSITIONS STILL OPEN ON BROKER: {open_syms} — MANUAL CLOSE NEEDED')
+                    else:
+                        log.info('Broker position verification: all clear')
+            except Exception as e:
+                log.error(f'Could not verify broker positions: {e}')
+
         if self.capital_pool:
             self.capital_pool.release('S1', self.daily_pnl)
 
