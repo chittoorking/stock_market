@@ -217,10 +217,16 @@ class PairsTrader:
             else:
                 oid_lag = api.place_order(laggard['sym'], qty_lag, 'BUY',
                                          laggard['price'], order_type='MARKET')
+                if not oid_lag:
+                    log.error(f'Failed to enter laggard leg {laggard["sym"]} — skipping pair')
+                    continue
                 oid_lead = api.place_order(leader['sym'], qty_lead, 'SELL',
                                           leader['price'], order_type='MARKET')
-                if not oid_lag or not oid_lead:
-                    log.error(f'Failed to enter pair {pair_key}')
+                if not oid_lead:
+                    # Leg 1 filled but leg 2 failed — close leg 1 immediately
+                    log.error(f'Failed to enter leader leg {leader["sym"]} — closing laggard {laggard["sym"]}')
+                    api.place_order(laggard['sym'], qty_lag, 'SELL',
+                                    laggard['price'], order_type='MARKET')
                     continue
 
             entry_lag = laggard['price']

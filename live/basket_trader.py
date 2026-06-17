@@ -1079,8 +1079,9 @@ class BasketTrader:
                 # Before retrying, check if position is still open on broker
                 try:
                     broker_pos = api.get_positions()
-                    still_open = any(p.get('symbol', '') == sym and abs(p.get('quantity', 0)) > 0
-                                     for p in broker_pos) if broker_pos else False
+                    still_open = any(
+                        p.get('trading_symbol', '') == sym and abs(int(p.get('net_quantity', 0))) > 0
+                        for p in broker_pos) if broker_pos else False
                     if not still_open:
                         log.info(f'{sym} already closed on broker — skipping retry')
                         oid = 'already_closed'
@@ -1162,12 +1163,18 @@ class BasketTrader:
             try:
                 broker_positions = api.get_positions()
                 if broker_positions:
-                    open_syms = [p.get('symbol', '?') for p in broker_positions
-                                 if abs(p.get('quantity', 0)) > 0]
-                    if open_syms:
-                        log.error(f'POSITIONS STILL OPEN ON BROKER: {open_syms} — MANUAL CLOSE NEEDED')
+                    open_pos = []
+                    for p in broker_positions:
+                        qty = p.get('net_quantity', 0)
+                        sym = p.get('trading_symbol', p.get('security_id', '?'))
+                        if abs(int(qty)) > 0:
+                            open_pos.append(f'{sym}(qty={qty})')
+                    if open_pos:
+                        log.error(f'POSITIONS STILL OPEN ON BROKER: {open_pos} — MANUAL CLOSE NEEDED')
                     else:
                         log.info('Broker position verification: all clear')
+                else:
+                    log.info('Broker position verification: all clear')
             except Exception as e:
                 log.error(f'Could not verify broker positions: {e}')
 
