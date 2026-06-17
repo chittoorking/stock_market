@@ -394,15 +394,15 @@ class BasketTrader:
                 if abs(gap) < 0.5:
                     continue
 
-                # Did it fill? Check if close moved toward prev_close
-                if gap > 0:  # gap up
-                    filled = 1 if close < day_open else 0  # close below open = filled
-                else:  # gap down
-                    filled = 1 if close > day_open else 0  # close above open = filled
+                # Estimate pnl_pct as if we traded it (fade the gap)
+                if gap > 0:  # gap up → SHORT
+                    pnl_pct = (day_open - close) / day_open * 100
+                else:  # gap down → LONG
+                    pnl_pct = (close - day_open) / day_open * 100
 
                 if sym not in self.fill_history:
                     self.fill_history[sym] = []
-                self.fill_history[sym].append([self.today, filled])
+                self.fill_history[sym].append([self.today, pnl_pct])
                 self.fill_history[sym] = self.fill_history[sym][-50:]
                 updated += 1
 
@@ -1332,6 +1332,11 @@ class BasketTrader:
         # Step 5: Enter
         self.enter_basket(basket)
 
+        # Step 5b: Launch pairs session in background thread (runs at 9:30)
+        import threading
+        pairs_thread = threading.Thread(target=self._run_pairs_session, daemon=True)
+        pairs_thread.start()
+
         # Step 6: Monitor via WebSocket
         self.monitor_ws()
 
@@ -1370,8 +1375,10 @@ class BasketTrader:
 
         self.close_all()
 
-        # Step 7b: PAIRS SESSION (after gap fill exits, capital is free)
-        self._run_pairs_session()
+        # Wait for pairs thread to finish (if still running)
+        if pairs_thread.is_alive():
+            log.info('Waiting for pairs session to finish...')
+            pairs_thread.join(timeout=60)
 
         # Step 8: Update WR for ALL gap stocks (not just traded ones)
         self._update_all_fill_history()
