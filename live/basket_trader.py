@@ -783,6 +783,8 @@ class BasketTrader:
         for c, w in zip(basket, weights):
             log.info(f'  {c["sym"]:<12s} weight={w:.1%} = Rs {session_capital*w:,.0f}')
 
+        # Build order list
+        orders = []
         for c, w in zip(basket, weights):
             sym = c['sym']
             price = c['price']
@@ -790,54 +792,74 @@ class BasketTrader:
             qty = int(pos_size / price)
             if qty <= 0:
                 continue
-
             side = c['direction']
 
-            # [FEATURE 3] Pre-check margin
+            # Pre-check margin
             if not self.paper_mode:
                 margin_needed = qty * price / LEVERAGE
                 if margin_needed > self.available_margin * 0.95:
-                    log.warning(f'{sym}: margin Rs {margin_needed:,.0f} > available Rs {self.available_margin:,.0f}, reducing qty')
+                    log.warning(f'{sym}: margin Rs {margin_needed:,.0f} > available, reducing qty')
                     qty = int(self.available_margin * 0.95 / price * LEVERAGE)
                     if qty <= 0:
-                        log.error(f'{sym}: insufficient margin, skipping')
                         continue
-
-            if self.paper_mode:
-                order_id = f'PAPER-{sym}-{int(time.time())}'
-                log.info(f'[PAPER] {side} {qty} {sym} @ Rs {price:.2f}')
-            else:
-                order_id = api.place_order(sym, qty, side, price, order_type='MARKET')
-                if order_id is None:
-                    log.error(f'FAILED to enter {sym}')
-                    continue
-
-                # [FEATURE 4] Check order status via WebSocket
-                time.sleep(0.5)
-                if self.order_feed.is_rejected(order_id):
-                    log.error(f'{sym} order REJECTED: {order_id}')
-                    continue
-
-                # Update available margin
                 self.available_margin -= qty * price / LEVERAGE
 
-            # BUG FIX: Use actual fill price from order book, not quote price
-            # In paper mode, use the quote price. In live, we should get
-            # the actual fill price from order updates, but for now use quote.
-            entry = price
+            orders.append({'sym': sym, 'side': side, 'qty': qty, 'price': price, 'candidate': c})
+
+        # Place all orders in PARALLEL (speed is the edge)
+        import threading
+        order_results = {}
+
+        def place_one(o):
+            sym = o['sym']
+            if self.paper_mode:
+                order_results[sym] = f'PAPER-{sym}-{int(time.time())}'
+                log.info(f'[PAPER] {o["side"]} {o["qty"]} {sym} @ Rs {o["price"]:.2f}')
+            else:
+                oid = api.place_order(sym, o['qty'], o['side'], o['price'], order_type='MARKET')
+                if oid is None:
+                    log.error(f'FAILED to enter {sym}')
+                    return
+                order_results[sym] = oid
+                log.info(f'ORDER {o["side"]} {o["qty"]} {sym} -> {oid}')
+
+        threads = [threading.Thread(target=place_one, args=(o,)) for o in orders]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        # Brief pause then check for rejections
+        if not self.paper_mode and order_results:
+            time.sleep(1)
+
+        # Register positions for successfully placed orders
+        for o in orders:
+            sym = o['sym']
+            oid = order_results.get(sym)
+            if not oid:
+                continue
+
+            # Check rejection
+            if not self.paper_mode and self.order_feed.is_rejected(oid):
+                log.error(f'{sym} order REJECTED: {oid}')
+                continue
+
+            c = o['candidate']
+            entry = o['price']
+            side = o['side']
             if side == 'SELL':
                 sl_price = entry * (1 + c['sl_pct'] / 100)
-                trail_level = sl_price  # trail starts at stop loss level
             else:
                 sl_price = entry * (1 - c['sl_pct'] / 100)
-                trail_level = sl_price  # trail starts at stop loss level
+            trail_level = sl_price
 
             self.positions[sym] = {
-                'direction': side, 'entry': entry, 'qty': qty,
+                'direction': side, 'entry': entry, 'qty': o['qty'],
                 'sl_pct': c['sl_pct'], 'trail_pct': c['trail_pct'],
                 'sl_price': sl_price, 'mfe': 0.0,
                 'trail_active': False, 'trail_level': trail_level,
-                'order_id': order_id, 'gap': c['gap'], 'score': c['score'],
+                'order_id': oid, 'gap': c['gap'], 'score': c['score'],
                 'atr_pct': c['atr_pct'],
                 'bar1_high': entry, 'bar1_low': entry, 'bar1_range': 0.0,
             }
