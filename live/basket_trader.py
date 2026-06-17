@@ -1069,13 +1069,24 @@ class BasketTrader:
         if self.paper_mode:
             log.info(f'[PAPER] EXIT {exit_side} {qty} {sym} @ Rs {exit_price:.2f} ({reason})')
         else:
-            # Retry exit up to 3 times
+            # Retry exit up to 3 times, but check broker before retry
             oid = None
             for attempt in range(3):
                 oid = api.place_order(sym, qty, exit_side, exit_price, order_type='MARKET')
                 if oid is not None:
                     break
-                log.error(f'Exit {sym} attempt {attempt+1}/3 failed, retrying...')
+                log.error(f'Exit {sym} attempt {attempt+1}/3 failed')
+                # Before retrying, check if position is still open on broker
+                try:
+                    broker_pos = api.get_positions()
+                    still_open = any(p.get('symbol', '') == sym and abs(p.get('quantity', 0)) > 0
+                                     for p in broker_pos) if broker_pos else False
+                    if not still_open:
+                        log.info(f'{sym} already closed on broker — skipping retry')
+                        oid = 'already_closed'
+                        break
+                except Exception:
+                    pass
                 time.sleep(1)
             if oid is None:
                 log.error(f'FAILED to exit {sym} after 3 attempts — removing from tracking anyway')
