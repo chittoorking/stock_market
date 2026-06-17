@@ -180,8 +180,9 @@ class PriceFeed:
         """Get latest price for a symbol. Falls back to REST if WS not available."""
         scrip = api.SCRIP_CODES.get(sym)
         if scrip:
+            ws_key = scrip.replace('_', ':')  # NSE_2885 → NSE:2885
             with self._lock:
-                price = self.prices.get(scrip)
+                price = self.prices.get(ws_key)
             if price:
                 return price
         # Fallback to REST
@@ -195,8 +196,9 @@ class PriceFeed:
         for sym in syms:
             scrip = api.SCRIP_CODES.get(sym)
             if scrip:
+                ws_key = scrip.replace('_', ':')
                 with self._lock:
-                    price = self.prices.get(scrip)
+                    price = self.prices.get(ws_key)
                 if price:
                     result[sym] = price
                     continue
@@ -738,7 +740,7 @@ class BasketTrader:
         n = len(basket)
 
         # Request capital from shared pool (caps to available if other sessions active)
-        per_stock = int(self.total_capital * 0.95) // n  # 5% buffer
+        per_stock = self.total_capital // n  # 5% buffer already in capital_pool
         if self.capital_pool:
             per_stock = self.capital_pool.request('S1', n, per_stock)
             if per_stock == 0:
@@ -923,6 +925,12 @@ class BasketTrader:
                 now = datetime.now()
                 if now.second < 2 and now.minute % 5 == 0 and self.flip_candidates:
                     self._check_flip_entries()
+
+                # Force close at 3:15 PM — don't hold past market close
+                if now.hour > 15 or (now.hour == 15 and now.minute >= 15):
+                    log.warning('3:15 PM — force closing all positions from monitor loop')
+                    self.close_all()
+                    break
 
             except KeyboardInterrupt:
                 log.warning('Keyboard interrupt — closing all')
