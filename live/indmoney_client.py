@@ -413,12 +413,14 @@ def get_order_book():
 
 
 def get_funds():
-    """Get available funds/margin."""
+    """Get available funds/margin for intraday trading."""
     try:
         r = requests.get(f'{BASE}/funds', headers=headers(), timeout=10)
         if r.status_code == 200:
             data = r.json().get('data', {})
-            return data.get('available_balance', 0)
+            # Use eq_mis (equity MIS/intraday margin) or fall back to sod_balance
+            avl = data.get('detailed_avl_balance', {})
+            return avl.get('eq_mis', 0) or data.get('sod_balance', 0)
     except Exception as e:
         log.error(f'Funds error: {e}')
     return 0
