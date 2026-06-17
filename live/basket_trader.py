@@ -489,20 +489,22 @@ class BasketTrader:
             log.error(f'Below Rs 20K = fewer than 5 stocks = no diversification safety.')
             return
 
-        # Adjust basket size based on capital
-        # Min Rs 20,000 per stock position (with 5x leverage = Rs 4,000 margin per stock)
-        max_affordable = max(1, int(self.total_capital / 20000))
-        self.optimal_basket = min(MAX_BASKET, max_affordable)
+        # Optimal basket size by capital slab (backtest-validated with charges)
+        # Under 2L: 5 stocks (charges eat profit with more stocks)
+        # 2L-5L: 8 stocks (diversification starts paying off)
+        # 5L+: 10 stocks (full strategy, charges negligible)
+        if self.capital < 200000:
+            self.optimal_basket = 5
+        elif self.capital < 500000:
+            self.optimal_basket = 8
+        else:
+            self.optimal_basket = 10
 
-        # Safety warnings
-        if self.optimal_basket < 3:
-            log.warning(f'Capital Rs {self.capital:,}: only {self.optimal_basket} stocks possible.')
-            log.warning(f'LOW DIVERSIFICATION — expect volatile days. 100% green NOT guaranteed.')
-        elif self.optimal_basket < 5:
-            log.warning(f'Capital Rs {self.capital:,}: {self.optimal_basket} stocks.')
-            log.warning(f'Moderate diversification. Some red days possible.')
-        elif self.optimal_basket >= 5:
-            log.info(f'Good diversification: {self.optimal_basket} stocks.')
+        # Cap to what we can actually afford
+        max_affordable = max(1, int(self.total_capital / 20000))
+        self.optimal_basket = min(self.optimal_basket, max_affordable)
+
+        log.info(f'Capital slab: Rs {self.capital:,} -> {self.optimal_basket} stocks')
 
         log.info(f'Capital: Rs {self.capital:,} x {LEVERAGE}x = Rs {self.total_capital:,}')
         log.info(f'Basket: {self.optimal_basket} stocks, Rs {self.total_capital/self.optimal_basket:,.0f} each')
