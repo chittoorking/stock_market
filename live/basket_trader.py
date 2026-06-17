@@ -661,16 +661,24 @@ class BasketTrader:
     def scan_gaps(self):
         log.info('Scanning for gaps...')
 
+        # Use opening price for gap calculation (LTP may have already moved)
+        quotes = api.get_full_quote(ALL_STOCKS)
         ltp = api.get_ltp(ALL_STOCKS)
         candidates = []
 
         for sym in ALL_STOCKS:
-            price = ltp.get(sym, 0)
+            q = quotes.get(sym, {})
+            open_price = q.get('open', 0)
+            current_price = ltp.get(sym, 0)
+            # Use open price for gap detection (LTP may have already filled the gap)
+            gap_price = open_price or current_price
+            # Use current LTP for entry price
+            price = current_price or open_price
             prev = self.prev_close.get(sym, 0)
-            if price <= 0 or prev <= 0:
+            if gap_price <= 0 or prev <= 0 or price <= 0:
                 continue
 
-            gap = (price - prev) / prev * 100
+            gap = (gap_price - prev) / prev * 100
             if abs(gap) < MIN_GAP:
                 continue
 
