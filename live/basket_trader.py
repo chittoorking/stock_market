@@ -1337,8 +1337,13 @@ class BasketTrader:
             log.info(f'Waiting {wait:.0f}s for market open...')
             time.sleep(max(0, wait))
 
-        # Step 4: Scan + Score (includes market depth)
-        basket = self.scan_gaps()
+        # Step 4: Scan + Score — hard cutoff at 9:20, gaps are stale after that
+        now = datetime.now()
+        if now.hour > 9 or (now.hour == 9 and now.minute >= 20):
+            log.warning(f'Past 9:20 AM — too late for gap fill entry, skipping basket')
+            basket = []
+        else:
+            basket = self.scan_gaps()
 
         # Step 4b: Launch pairs session in background thread (runs at 9:30)
         # Pairs runs independently regardless of gap fill basket
