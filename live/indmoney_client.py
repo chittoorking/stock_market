@@ -326,9 +326,12 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', 
     return None
 
 
-def place_smart_order(sym, qty, side, limit_price, trigger_price,
+def place_smart_order(sym, qty, side, limit_price, trigger_price=0,
                       sl_trigger=None, sl_limit=None, tgt_trigger=None, tgt_limit=None):
-    """Place smart order with optional SL + target legs (OCO-like)."""
+    """Place smart order with optional SL + target legs (OCO-like).
+    If trigger_price=0, uses MARKET entry (converted to LIMIT by broker).
+    SL/target legs are placed on exchange automatically after fill.
+    """
     scrip = SCRIP_CODES.get(sym)
     if not scrip:
         return None
@@ -340,12 +343,13 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price,
         'exchange': 'NSE',
         'segment': 'EQUITY',
         'product': 'INTRADAY',
-        'order_type': 'LIMIT',
+        'order_type': 'MARKET' if trigger_price == 0 else 'LIMIT',
         'security_id': security_id,
         'qty': qty,
-        'limit_price': round(limit_price, 2),
         'algo_id': '99999',
     }
+    if trigger_price > 0 or order['order_type'] == 'LIMIT':
+        order['limit_price'] = round(limit_price, 2)
 
     # Add SL leg
     if sl_trigger and sl_limit:
@@ -424,3 +428,26 @@ def get_funds():
     except Exception as e:
         log.error(f'Funds error: {e}')
     return 0
+
+
+def get_margin_required(sym, qty, side, price, product='INTRADAY'):
+    """Check margin required before placing an order. Returns dict with total_margin and charges."""
+    scrip = SCRIP_CODES.get(sym)
+    if not scrip:
+        return None
+    security_id = scrip.split('_')[1]
+    try:
+        r = requests.get(
+            f'{BASE}/margin?segment=EQUITY&exchange=NSE&securityID={security_id}'
+            f'&txnType={side}&quantity={qty}&price={round(price,2)}&product={product}',
+            headers=headers(), timeout=10)
+        if r.status_code == 200:
+            data = r.json().get('data', {})
+            return {
+                'total_margin': data.get('total_margin', 0),
+                'charges': data.get('total_charges', 0),
+                'brokerage': data.get('brokerage', 0),
+            }
+    except Exception as e:
+        log.error(f'Margin calc error: {e}')
+    return None

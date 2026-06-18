@@ -118,13 +118,17 @@ class PriceFeed:
 
         def on_message(ws, message):
             try:
+                if isinstance(message, bytes):
+                    message = message.decode('utf-8')
                 data = json.loads(message)
                 instrument = data.get('instrument', '')
-                ltp = data.get('data', {}).get('ltp')
-                if ltp is not None:
-                    with self._lock:
-                        self.prices[instrument] = float(ltp)
-            except Exception:
+                msg_data = data.get('data', {})
+                if isinstance(msg_data, dict):
+                    ltp = msg_data.get('ltp')
+                    if ltp is not None:
+                        with self._lock:
+                            self.prices[instrument] = float(ltp)
+            except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
 
         def on_error(ws, error):
@@ -812,16 +816,37 @@ class BasketTrader:
 
         def place_one(o):
             sym = o['sym']
+            c = o['candidate']
+            entry = o['price']
+            side = o['side']
+            # Calculate SL price for smart order
+            if side == 'SELL':
+                sl_trigger = entry * (1 + c['sl_pct'] / 100)
+                sl_limit = sl_trigger * 1.001  # small buffer above trigger
+            else:
+                sl_trigger = entry * (1 - c['sl_pct'] / 100)
+                sl_limit = sl_trigger * 0.999  # small buffer below trigger
+
             if self.paper_mode:
                 order_results[sym] = f'PAPER-{sym}-{int(time.time())}'
-                log.info(f'[PAPER] {o["side"]} {o["qty"]} {sym} @ Rs {o["price"]:.2f}')
+                log.info(f'[PAPER] {side} {o["qty"]} {sym} @ Rs {entry:.2f} SL={sl_trigger:.2f}')
             else:
-                oid = api.place_order(sym, o['qty'], o['side'], o['price'], order_type='MARKET')
+                # Use smart order: entry + SL on exchange in one shot
+                oid = api.place_smart_order(
+                    sym, o['qty'], side, entry,
+                    trigger_price=0,  # market entry
+                    sl_trigger=round(sl_trigger, 2),
+                    sl_limit=round(sl_limit, 2),
+                )
+                if oid is None:
+                    # Fallback to regular order if smart order fails
+                    log.warning(f'{sym} smart order failed, falling back to regular')
+                    oid = api.place_order(sym, o['qty'], side, entry, order_type='MARKET')
                 if oid is None:
                     log.error(f'FAILED to enter {sym}')
                     return
                 order_results[sym] = oid
-                log.info(f'ORDER {o["side"]} {o["qty"]} {sym} -> {oid}')
+                log.info(f'SMART ORDER {side} {o["qty"]} {sym} SL={sl_trigger:.2f} -> {oid}')
 
         threads = [threading.Thread(target=place_one, args=(o,)) for o in orders]
         for t in threads:
