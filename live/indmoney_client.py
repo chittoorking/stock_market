@@ -437,16 +437,24 @@ def get_margin_required(sym, qty, side, price, product='INTRADAY'):
         return None
     security_id = scrip.split('_')[1]
     try:
-        r = requests.get(
-            f'{BASE}/margin?segment=EQUITY&exchange=NSE&securityID={security_id}'
-            f'&txnType={side}&quantity={qty}&price={round(price,2)}&product={product}',
-            headers=headers(), timeout=10)
+        # API uses GET with JSON body (per docs)
+        r = requests.get(f'{BASE}/margin', headers=headers(), json={
+            'segment': 'EQUITY',
+            'exchange': 'NSE',
+            'securityID': security_id,
+            'txnType': side,
+            'quantity': str(qty),
+            'price': str(round(price, 2)),
+            'product': product,
+        }, timeout=10)
         if r.status_code == 200:
             data = r.json().get('data', {})
+            charges = data.get('charges', {})
             return {
                 'total_margin': data.get('total_margin', 0),
-                'charges': data.get('total_charges', 0),
-                'brokerage': data.get('brokerage', 0),
+                'charges': charges.get('total_charges', 0),
+                'brokerage': charges.get('brokerage', 0),
+                'stt': charges.get('stt', 0),
             }
     except Exception as e:
         log.error(f'Margin calc error: {e}')
