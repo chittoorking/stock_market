@@ -1625,16 +1625,15 @@ class BasketTrader:
         else:
             basket = self.scan_gaps()
 
-        # Step 4b: Launch background sessions (run independently)
+        # Step 4b: Launch pairs session in background thread (runs at 9:30)
         import threading
         pairs_thread = threading.Thread(target=self._run_pairs_session, daemon=True)
         pairs_thread.start()
-        pullback_thread = threading.Thread(target=self._run_pullback_session, daemon=True)
-        pullback_thread.start()
+        # NOTE: Pullback strategy tested negative in sequential bar sim (44% WR).
+        # The earlier +860/day result was hindsight bias. NOT deployed.
 
         if not basket:
-            log.info('No gap fill basket today — waiting for background sessions.')
-            pullback_thread.join(timeout=18000)  # wait up to 5 hours (till 14:00)
+            log.info('No gap fill basket today — waiting for pairs session.')
             pairs_thread.join(timeout=60)
             self.price_feed.stop()
             self._save_fill_history()
@@ -1687,9 +1686,7 @@ class BasketTrader:
         if pairs_thread.is_alive():
             log.info('Waiting for pairs session to finish...')
             pairs_thread.join(timeout=60)
-        if pullback_thread.is_alive():
-            log.info('Waiting for pullback session to finish...')
-            pullback_thread.join(timeout=60)
+        # Pullback disabled — tested negative (44% WR in sequential sim)
 
         # Step 8: Update WR for ALL gap stocks (not just traded ones)
         self._update_all_fill_history()
