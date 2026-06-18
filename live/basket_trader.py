@@ -1559,13 +1559,11 @@ class BasketTrader:
         else:
             basket = self.scan_gaps()
 
-        # Step 4b: Launch background sessions
+        # Step 4b: Launch pairs session in background
         import threading
         pairs_thread = threading.Thread(target=self._run_pairs_session, daemon=True)
         pairs_thread.start()
-        # MTF trend dip — PAPER ONLY for validation
-        mtf_thread = threading.Thread(target=self._run_mtf_session, daemon=True)
-        mtf_thread.start()
+        # MTF tested -Rs 1,909 on live data (33% WR vs 85% backtest). NOT deployed.
 
         if not basket:
             log.info('No gap fill basket today — waiting for pairs session.')
