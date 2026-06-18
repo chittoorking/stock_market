@@ -398,7 +398,11 @@ def get_positions(product='intraday'):
                         headers=headers(), timeout=10)
         if r.status_code == 200:
             data = r.json().get('data', {})
-            return data.get('net_positions', [])
+            if isinstance(data, list):
+                return data  # API returns list directly when positions exist
+            if isinstance(data, dict):
+                return data.get('net_positions', [])
+            return []
     except Exception as e:
         log.error(f'Positions error: {e}')
     return []
