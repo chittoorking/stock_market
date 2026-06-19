@@ -30,10 +30,11 @@ def bb_calc(closes, period=10, std_mult=1.0):
     return mid, upper, lower
 
 def get_15min_bars(sym):
-    """Get today's 15-min bars from historical API."""
+    """Get prev day + today's 15-min bars from historical API."""
     now_ms = int(time.time() * 1000)
-    open_ms = now_ms - 8*3600*1000  # 8 hours ago
-    candles = get_historical_candles(sym, "5minute", open_ms, now_ms)
+    # Fetch 2 days of 5-min bars (prev day + today for BB history)
+    start_ms = now_ms - 30*3600*1000  # 30 hours ago covers prev day
+    candles = get_historical_candles(sym, "5minute", start_ms, now_ms)
     if not candles:
         return []
     # Build 15-min from 5-min
