@@ -3,7 +3,7 @@ import sys, io, time, math
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stdout.reconfigure(line_buffering=True)
 from live.indmoney_client import (get_ltp, place_order, get_historical_candles,
-                                   get_positions, SCRIP_CODES)
+                                   get_positions, SCRIP_CODES, SYM_FROM_SEC_ID)
 from datetime import datetime
 import numpy as np
 
@@ -52,11 +52,18 @@ def load_broker_positions():
         broker_pos = get_positions()
         for p in broker_pos:
             sym = p.get("symbol", "")
+            sec_id = str(p.get("security_id", ""))
             qty = int(p.get("net_qty", 0))
             if qty == 0: continue
+            # Match by symbol first, then by security_id
             if sym not in SCRIP_CODES:
-                print(f"  SKIP {sym}: not in scrip codes", flush=True)
-                continue
+                mapped = SYM_FROM_SEC_ID.get(sec_id)
+                if mapped:
+                    print(f"  Mapped broker '{sym}' -> '{mapped}' via sec_id {sec_id}", flush=True)
+                    sym = mapped
+                else:
+                    print(f"  SKIP {sym} (sec_id={sec_id}): not in scrip codes", flush=True)
+                    continue
             avg = float(p.get("avg_price", 0))
             if avg <= 0: continue
             direction = "BUY" if qty > 0 else "SELL"

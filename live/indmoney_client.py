@@ -67,8 +67,10 @@ SCRIP_CODES = {
     'UNITDSPR': 'NSE_7269', 'VBL': 'NSE_16713',
 }
 
-# Reverse map
+# Reverse maps
 SYM_FROM_SCRIP = {v: k for k, v in SCRIP_CODES.items()}
+# security_id -> our symbol (for matching broker positions)
+SYM_FROM_SEC_ID = {v.split('_')[1]: k for k, v in SCRIP_CODES.items()}
 
 
 def get_token():
