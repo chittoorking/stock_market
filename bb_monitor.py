@@ -54,29 +54,36 @@ last_scan = 0
 print(f"BB+ALMA LIVE started at {datetime.now().strftime('%H:%M:%S')}", flush=True)
 print(f"Positions: {list(positions.keys())}", flush=True)
 
-while positions and datetime.now().hour < 15:
+while datetime.now().hour < 15:
     ltp = get_ltp(list(positions.keys()))
     for sym in list(positions.keys()):
         pos = positions[sym]
         price = ltp.get(sym, 0)
         if price <= 0: continue
-        ep = pos["entry"]
-        fav = (price - ep) / ep * 100
+        ep = pos["entry"]; d = pos["dir"]
+        if d == "BUY":
+            fav = (price - ep) / ep * 100
+        else:
+            fav = (ep - price) / ep * 100
         pos["mfe"] = max(pos["mfe"], fav)
 
-        sl_price = ep * 0.999
         should_exit = False; reason = ""
-
         if pos["mfe"] > TRAIL_PCT:
-            trail_level = ep * (1 + (pos["mfe"] - TRAIL_PCT) / 100)
-            if price <= trail_level:
-                should_exit = True; reason = "TRAIL"
-        elif price <= sl_price:
-            should_exit = True; reason = "STOP"
+            nt = pos["mfe"] - TRAIL_PCT
+            if d == "BUY":
+                trail_level = ep * (1 + nt / 100)
+                if price <= trail_level: should_exit = True; reason = "TRAIL"
+            else:
+                trail_level = ep * (1 - nt / 100)
+                if price >= trail_level: should_exit = True; reason = "TRAIL"
+        else:
+            if d == "BUY" and price <= ep * 0.999: should_exit = True; reason = "STOP"
+            elif d == "SELL" and price >= ep * 1.001: should_exit = True; reason = "STOP"
 
         if should_exit:
-            oid = place_order(sym, pos["qty"], "SELL", price, order_type="MARKET")
-            pnl = (price - ep) / ep * 100
+            exit_side = "SELL" if d == "BUY" else "BUY"
+            oid = place_order(sym, pos["qty"], exit_side, price, order_type="MARKET")
+            pnl = fav if fav > 0 else ((price-ep)/ep*100 if d=="BUY" else (ep-price)/ep*100)
             pnl_rs = pnl / 100 * ep * pos["qty"]
             t = datetime.now().strftime("%H:%M:%S")
             print(f"{t} EXIT {sym} {ep:.2f}->{price:.2f} {pnl:+.3f}% Rs {pnl_rs:+,.0f} ({reason}) oid={oid}", flush=True)
@@ -112,13 +119,12 @@ while positions and datetime.now().hour < 15:
             signals.sort(key=lambda x: -x['score'])
             slots = MAX_POS - len(positions)
             for sig in signals[:slots]:
-                sym = sig['sym']; price = sig['price']; side = sig['dir']
-                exit_side = 'SELL' if side == 'BUY' else 'BUY'
+                sym = sig['sym']; price = sig['price']
+                side = 'BUY' if sig['dir'] == 'LONG' else 'SELL'
                 qty = int(CAPITAL/5/price) if price > 0 else 0
                 if qty <= 0: continue
                 oid = place_order(sym, qty, side, price, order_type='MARKET')
                 if oid:
-                    sl_price = price*0.999 if side=='BUY' else price*1.001
                     positions[sym] = {"dir":side,"entry":price,"qty":qty,"mfe":0.0}
                     print(f"  ENTER {side} {qty} {sym} @ {price:.2f} -> {oid}", flush=True)
                     trades.append({'sym':sym,'action':'ENTER','price':price})
@@ -149,8 +155,9 @@ if positions:
     for sym in list(positions.keys()):
         pos = positions[sym]
         price = ltp.get(sym, pos["entry"])
-        oid = place_order(sym, pos["qty"], "SELL", price, order_type="MARKET")
-        pnl = (price - pos["entry"]) / pos["entry"] * 100
+        exit_side = "SELL" if pos["dir"] == "BUY" else "BUY"
+        oid = place_order(sym, pos["qty"], exit_side, price, order_type="MARKET")
+        pnl = (price-pos["entry"])/pos["entry"]*100 if pos["dir"]=="BUY" else (pos["entry"]-price)/pos["entry"]*100
         pnl_rs = pnl / 100 * pos["entry"] * pos["qty"]
         print(f"EOD {sym} {pnl:+.3f}% Rs {pnl_rs:+,.0f} oid={oid}", flush=True)
 
