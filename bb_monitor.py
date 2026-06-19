@@ -118,14 +118,27 @@ while datetime.now().hour < 15:
         if d == "BUY" and price <= ep - sl_abs: should_exit = True; reason = "STOP"
         elif d == "SELL" and price >= ep + sl_abs: should_exit = True; reason = "STOP"
 
-        # Trail checks only on 15-min bar close (match backtest)
+        # Trail checks only on 15-min bar close using actual bar data
         if is_bar_close and not should_exit:
-            if d == "BUY":
-                trail_stop = best - tr_abs
-                if price <= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
-            else:
-                trail_stop = best + tr_abs
-                if price >= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
+            # Fetch actual 15-min bar close from API
+            bars15 = get_15min_bars(sym)
+            if bars15:
+                bar_close = bars15[-1]['c']
+                bar_high = bars15[-1]['h']
+                bar_low = bars15[-1]['l']
+                # Update best from bar high/low (not tick)
+                if d == "BUY" and bar_high > best: best = bar_high; pos["best"] = best
+                elif d == "SELL" and bar_low < best: best = bar_low; pos["best"] = best
+                # Check trail against bar close
+                if d == "BUY":
+                    trail_stop = best - tr_abs
+                    if bar_close <= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
+                else:
+                    trail_stop = best + tr_abs
+                    if bar_close >= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
+                # Use bar close as exit price
+                if should_exit:
+                    price = bar_close
 
         if should_exit:
             # Verify position still exists on broker before exiting
