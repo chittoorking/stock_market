@@ -1,8 +1,9 @@
-"""Live BB+ALMA: monitor + scan for new entries all day."""
+"""Live BB+ALMA monitor — reads positions from broker, never hardcodes."""
 import sys, io, time, math
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stdout.reconfigure(line_buffering=True)
-from live.indmoney_client import get_ltp, place_order, get_historical_candles, SCRIP_CODES
+from live.indmoney_client import (get_ltp, place_order, get_historical_candles,
+                                   get_positions, SCRIP_CODES)
 from datetime import datetime
 import numpy as np
 
@@ -42,20 +43,46 @@ def get_15min_bars(sym):
                        'l':min(c['l'] for c in chunk),'c':chunk[-1]['c']})
     return bars15
 
-positions = {
-    "INFY": {"dir":"BUY","entry":1036.20,"qty":40,"mfe":0.0},
-    "TCS": {"dir":"BUY","entry":2071.40,"qty":20,"mfe":0.0},
-    "APOLLOHOSP": {"dir":"BUY","entry":4715.00,"qty":9,"mfe":0.0},
-}
+def load_broker_positions():
+    """Read ACTUAL positions from broker — single source of truth."""
+    result = {}
+    try:
+        broker_pos = get_positions()
+        for p in broker_pos:
+            sym = p.get("symbol", "")
+            qty = int(p.get("net_qty", 0))
+            if qty == 0: continue
+            avg = float(p.get("avg_price", 0))
+            if avg <= 0: continue
+            direction = "BUY" if qty > 0 else "SELL"
+            result[sym] = {
+                "dir": direction,
+                "entry": avg,
+                "qty": abs(qty),
+                "mfe": 0.0,
+            }
+    except Exception as e:
+        print(f"Error loading positions: {e}", flush=True)
+    return result
+
+# Load positions from broker on startup
+positions = load_broker_positions()
+exited_today = set()  # cooldown: don't re-enter stocks exited today
 trades = []
 last_print = 0
 last_scan = 0
 
 print(f"BB+ALMA LIVE started at {datetime.now().strftime('%H:%M:%S')}", flush=True)
-print(f"Positions: {list(positions.keys())}", flush=True)
+print(f"Broker positions: {positions}", flush=True)
 
 while datetime.now().hour < 15:
-    ltp = get_ltp(list(positions.keys()))
+    # Get LTP for open positions
+    if positions:
+        ltp = get_ltp(list(positions.keys()))
+    else:
+        ltp = {}
+
+    # Monitor and trail existing positions
     for sym in list(positions.keys()):
         pos = positions[sym]
         price = ltp.get(sym, 0)
@@ -81,12 +108,23 @@ while datetime.now().hour < 15:
             elif d == "SELL" and price >= ep * 1.001: should_exit = True; reason = "STOP"
 
         if should_exit:
+            # Verify position still exists on broker before exiting
+            broker_pos = load_broker_positions()
+            if sym not in broker_pos:
+                print(f"  {sym} not on broker — removing from tracking", flush=True)
+                del positions[sym]
+                continue
+
             exit_side = "SELL" if d == "BUY" else "BUY"
-            oid = place_order(sym, pos["qty"], exit_side, price, order_type="MARKET")
-            pnl = fav if fav > 0 else ((price-ep)/ep*100 if d=="BUY" else (ep-price)/ep*100)
-            pnl_rs = pnl / 100 * ep * pos["qty"]
+            actual_qty = broker_pos[sym]["qty"]
+            oid = place_order(sym, actual_qty, exit_side, price, order_type="MARKET")
+            pnl_pct = (price-ep)/ep*100 if d=="BUY" else (ep-price)/ep*100
+            pnl_rs = pnl_pct / 100 * ep * actual_qty
             t = datetime.now().strftime("%H:%M:%S")
-            print(f"{t} EXIT {sym} {ep:.2f}->{price:.2f} {pnl:+.3f}% Rs {pnl_rs:+,.0f} ({reason}) oid={oid}", flush=True)
+            m = "+" if pnl_rs > 0 else "-"
+            print(f"{t} EXIT {m} {d} {sym} {ep:.2f}->{price:.2f} {pnl_pct:+.3f}% Rs {pnl_rs:+,.0f} ({reason}) oid={oid}", flush=True)
+            trades.append({"sym":sym,"pnl_rs":pnl_rs})
+            exited_today.add(sym)
             del positions[sym]
 
     # Scan for new entries every 30 min
@@ -94,10 +132,10 @@ while datetime.now().hour < 15:
     if now_t - last_scan > 1800 and len(positions) < MAX_POS:
         last_scan = now_t
         t = datetime.now().strftime("%H:%M")
-        print(f"\n{t} SCANNING for new BB signals...", flush=True)
+        print(f"\n{t} SCANNING...", flush=True)
         signals = []
         for sym in ALL_STOCKS:
-            if sym in positions: continue
+            if sym in positions or sym in exited_today: continue
             bars15 = get_15min_bars(sym)
             if len(bars15) < 12: continue
             closes = [b['c'] for b in bars15]
@@ -114,7 +152,7 @@ while datetime.now().hour < 15:
                 score = abs(b['c']-mid[-1])/mid[-1]*100 if mid[-1]>0 else 0
                 signals.append({'sym':sym,'dir':signal,'score':score,'price':b['c']})
             time.sleep(0.1)
-        print(f"  Found {len(signals)} signals", flush=True)
+        print(f"  {len(signals)} signals (excluded {len(exited_today)} cooldown)", flush=True)
         if signals:
             signals.sort(key=lambda x: -x['score'])
             slots = MAX_POS - len(positions)
@@ -127,18 +165,17 @@ while datetime.now().hour < 15:
                 if oid:
                     positions[sym] = {"dir":side,"entry":price,"qty":qty,"mfe":0.0}
                     print(f"  ENTER {side} {qty} {sym} @ {price:.2f} -> {oid}", flush=True)
-                    trades.append({'sym':sym,'action':'ENTER','price':price})
 
     # Print P&L every 30s
     now = time.time()
-    if now - last_print > 30:
-        total = 0
-        parts = []
+    if now - last_print > 30 and positions:
+        total = 0; parts = []
         for sym, pos in positions.items():
             price = ltp.get(sym, 0)
             if price <= 0: continue
-            pnl = (price - pos["entry"]) / pos["entry"] * 100
-            rs = pnl / 100 * pos["entry"] * pos["qty"]
+            d = pos["dir"]; ep = pos["entry"]
+            pnl = (price-ep)/ep*100 if d=="BUY" else (ep-price)/ep*100
+            rs = pnl/100*ep*pos["qty"]
             total += rs
             parts.append(f"{sym}={pnl:+.2f}%")
         t = datetime.now().strftime("%H:%M")
@@ -151,14 +188,24 @@ while datetime.now().hour < 15:
 # 3:15 PM force close
 if positions:
     print("EOD FORCE CLOSE", flush=True)
-    ltp = get_ltp(list(positions.keys()))
+    # Verify against broker
+    broker_pos = load_broker_positions()
     for sym in list(positions.keys()):
+        if sym not in broker_pos:
+            print(f"  {sym} not on broker — skip", flush=True)
+            continue
         pos = positions[sym]
-        price = ltp.get(sym, pos["entry"])
+        price_data = get_ltp([sym])
+        price = price_data.get(sym, pos["entry"])
         exit_side = "SELL" if pos["dir"] == "BUY" else "BUY"
-        oid = place_order(sym, pos["qty"], exit_side, price, order_type="MARKET")
-        pnl = (price-pos["entry"])/pos["entry"]*100 if pos["dir"]=="BUY" else (pos["entry"]-price)/pos["entry"]*100
-        pnl_rs = pnl / 100 * pos["entry"] * pos["qty"]
-        print(f"EOD {sym} {pnl:+.3f}% Rs {pnl_rs:+,.0f} oid={oid}", flush=True)
+        actual_qty = broker_pos[sym]["qty"]
+        oid = place_order(sym, actual_qty, exit_side, price, order_type="MARKET")
+        d = pos["dir"]; ep = pos["entry"]
+        pnl = (price-ep)/ep*100 if d=="BUY" else (ep-price)/ep*100
+        pnl_rs = pnl/100*ep*actual_qty
+        print(f"  EOD {sym} {pnl:+.3f}% Rs {pnl_rs:+,.0f} oid={oid}", flush=True)
+        trades.append({"sym":sym,"pnl_rs":pnl_rs})
 
-print("Monitor done", flush=True)
+wins = sum(1 for t in trades if t["pnl_rs"] > 0)
+total_pnl = sum(t["pnl_rs"] for t in trades)
+print(f"\nBB+ALMA: {wins}W/{len(trades)-wins}L Rs {total_pnl:+,.0f}", flush=True)
