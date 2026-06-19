@@ -10,7 +10,8 @@ import numpy as np
 ALL_STOCKS = list(SCRIP_CODES.keys())
 CAPITAL = 250_000
 MAX_POS = 3
-TRAIL_PCT = 0.10
+TRAIL_MULT = 0.01  # trail = ATR * 0.01
+SL_MULT = 0.05     # SL = ATR * 0.05
 
 def alma_calc(data, window=9, offset=0.85, sigma=6):
     m = offset*(window-1); s = window/sigma
@@ -88,24 +89,31 @@ while datetime.now().hour < 15:
         price = ltp.get(sym, 0)
         if price <= 0: continue
         ep = pos["entry"]; d = pos["dir"]
+        atr_pct = pos.get("atr", 1.0)
+        atr_abs = atr_pct / 100 * ep
+        sl_abs = atr_abs * SL_MULT
+        tr_abs = atr_abs * TRAIL_MULT
+
         if d == "BUY":
             fav = (price - ep) / ep * 100
         else:
             fav = (ep - price) / ep * 100
         pos["mfe"] = max(pos["mfe"], fav)
 
+        best = pos.get("best", ep)
+        if d == "BUY" and price > best: best = price
+        elif d == "SELL" and price < best: best = price
+        pos["best"] = best
+
         should_exit = False; reason = ""
-        if pos["mfe"] > TRAIL_PCT:
-            nt = pos["mfe"] - TRAIL_PCT
-            if d == "BUY":
-                trail_level = ep * (1 + nt / 100)
-                if price <= trail_level: should_exit = True; reason = "TRAIL"
-            else:
-                trail_level = ep * (1 - nt / 100)
-                if price >= trail_level: should_exit = True; reason = "TRAIL"
+        if d == "BUY":
+            trail_stop = best - tr_abs
+            if price <= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
+            elif price <= ep - sl_abs: should_exit = True; reason = "STOP"
         else:
-            if d == "BUY" and price <= ep * 0.999: should_exit = True; reason = "STOP"
-            elif d == "SELL" and price >= ep * 1.001: should_exit = True; reason = "STOP"
+            trail_stop = best + tr_abs
+            if price >= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
+            elif price >= ep + sl_abs: should_exit = True; reason = "STOP"
 
         if should_exit:
             # Verify position still exists on broker before exiting
@@ -166,7 +174,13 @@ while datetime.now().hour < 15:
                 if qty <= 0: continue
                 oid = place_order(sym, qty, side, price, order_type='MARKET')
                 if oid:
-                    positions[sym] = {"dir":side,"entry":price,"qty":qty,"mfe":0.0}
+                    # Get ATR for trail/SL
+                    bars15 = get_15min_bars(sym)
+                    atr_p = 1.0
+                    if len(bars15) >= 5:
+                        ranges = [b['h']-b['l'] for b in bars15[-5:]]
+                        atr_p = np.mean(ranges) / price * 100 if price > 0 else 1.0
+                    positions[sym] = {"dir":side,"entry":price,"qty":qty,"mfe":0.0,"atr":atr_p,"best":price}
                     print(f"  ENTER {side} {qty} {sym} @ {price:.2f} -> {oid}", flush=True)
 
     # Print P&L every 30s
