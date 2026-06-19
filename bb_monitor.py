@@ -127,9 +127,6 @@ while datetime.now().hour < 15:
                 trail_stop = best + tr_abs
                 if price >= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
 
-    if is_bar_close:
-        last_bar_check = now_t
-
         if should_exit:
             # Verify position still exists on broker before exiting
             broker_pos = load_broker_positions()
@@ -149,6 +146,9 @@ while datetime.now().hour < 15:
             trades.append({"sym":sym,"pnl_rs":pnl_rs})
             exited_cooldown[sym] = time.time()
             del positions[sym]
+
+    if is_bar_close:
+        last_bar_check = now_t
 
     # Scan for new entries every 30 min
     now_t = time.time()
