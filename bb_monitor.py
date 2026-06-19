@@ -54,6 +54,9 @@ def load_broker_positions():
             sym = p.get("symbol", "")
             qty = int(p.get("net_qty", 0))
             if qty == 0: continue
+            if sym not in SCRIP_CODES:
+                print(f"  SKIP {sym}: not in scrip codes", flush=True)
+                continue
             avg = float(p.get("avg_price", 0))
             if avg <= 0: continue
             direction = "BUY" if qty > 0 else "SELL"
