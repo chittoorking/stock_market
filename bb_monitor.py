@@ -142,9 +142,9 @@ while datetime.now().hour < 15:
                 # Update best from bar high/low
                 if d == "BUY" and bar_high > best: best = bar_high; pos["best"] = best
                 elif d == "SELL" and bar_low < best: best = bar_low; pos["best"] = best
-                # SL check on bar (did bar low breach SL for BUY?)
-                if d == "BUY" and bar_low <= ep - sl_abs: should_exit = True; reason = "STOP"
-                elif d == "SELL" and bar_high >= ep + sl_abs: should_exit = True; reason = "STOP"
+                # SL check on bar close (not bar low — too tight for intraday noise)
+                if d == "BUY" and bar_close <= ep - sl_abs: should_exit = True; reason = "STOP"
+                elif d == "SELL" and bar_close >= ep + sl_abs: should_exit = True; reason = "STOP"
                 # Trail check on bar close
                 if not should_exit:
                     if d == "BUY":
