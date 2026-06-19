@@ -67,7 +67,7 @@ def load_broker_positions():
 
 # Load positions from broker on startup
 positions = load_broker_positions()
-exited_today = set()  # cooldown: don't re-enter stocks exited today
+exited_cooldown = {}  # sym -> exit_time, skip for 1 scan (30 min)
 trades = []
 last_print = 0
 last_scan = 0
@@ -124,7 +124,7 @@ while datetime.now().hour < 15:
             m = "+" if pnl_rs > 0 else "-"
             print(f"{t} EXIT {m} {d} {sym} {ep:.2f}->{price:.2f} {pnl_pct:+.3f}% Rs {pnl_rs:+,.0f} ({reason}) oid={oid}", flush=True)
             trades.append({"sym":sym,"pnl_rs":pnl_rs})
-            exited_today.add(sym)
+            exited_cooldown[sym] = time.time()
             del positions[sym]
 
     # Scan for new entries every 30 min
@@ -135,7 +135,9 @@ while datetime.now().hour < 15:
         print(f"\n{t} SCANNING...", flush=True)
         signals = []
         for sym in ALL_STOCKS:
-            if sym in positions or sym in exited_today: continue
+            if sym in positions: continue
+            # 30-min cooldown after exit
+            if sym in exited_cooldown and (time.time() - exited_cooldown[sym]) < 1800: continue
             bars15 = get_15min_bars(sym)
             if len(bars15) < 12: continue
             closes = [b['c'] for b in bars15]
@@ -152,7 +154,8 @@ while datetime.now().hour < 15:
                 score = abs(b['c']-mid[-1])/mid[-1]*100 if mid[-1]>0 else 0
                 signals.append({'sym':sym,'dir':signal,'score':score,'price':b['c']})
             time.sleep(0.1)
-        print(f"  {len(signals)} signals (excluded {len(exited_today)} cooldown)", flush=True)
+        cooled = sum(1 for s in exited_cooldown if (time.time()-exited_cooldown[s]) < 1800)
+        print(f"  {len(signals)} signals ({cooled} in cooldown)", flush=True)
         if signals:
             signals.sort(key=lambda x: -x['score'])
             slots = MAX_POS - len(positions)
