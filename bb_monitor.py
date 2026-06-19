@@ -76,6 +76,8 @@ last_scan = 0
 print(f"BB+ALMA LIVE started at {datetime.now().strftime('%H:%M:%S')}", flush=True)
 print(f"Broker positions: {positions}", flush=True)
 
+last_bar_check = 0
+
 while datetime.now().hour < 15:
     # Get LTP for open positions
     if positions:
@@ -83,7 +85,11 @@ while datetime.now().hour < 15:
     else:
         ltp = {}
 
-    # Monitor and trail existing positions
+    now_t = time.time()
+    # Only check trail on 15-min bar boundaries (match backtest resolution)
+    is_bar_close = (now_t - last_bar_check) >= 900  # 900s = 15 min
+
+    # Monitor positions
     for sym in list(positions.keys()):
         pos = positions[sym]
         price = ltp.get(sym, 0)
@@ -100,20 +106,29 @@ while datetime.now().hour < 15:
             fav = (ep - price) / ep * 100
         pos["mfe"] = max(pos["mfe"], fav)
 
+        # Update best price continuously (track high/low)
         best = pos.get("best", ep)
         if d == "BUY" and price > best: best = price
         elif d == "SELL" and price < best: best = price
         pos["best"] = best
 
         should_exit = False; reason = ""
-        if d == "BUY":
-            trail_stop = best - tr_abs
-            if price <= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
-            elif price <= ep - sl_abs: should_exit = True; reason = "STOP"
-        else:
-            trail_stop = best + tr_abs
-            if price >= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
-            elif price >= ep + sl_abs: should_exit = True; reason = "STOP"
+
+        # SL checks always (immediate protection)
+        if d == "BUY" and price <= ep - sl_abs: should_exit = True; reason = "STOP"
+        elif d == "SELL" and price >= ep + sl_abs: should_exit = True; reason = "STOP"
+
+        # Trail checks only on 15-min bar close (match backtest)
+        if is_bar_close and not should_exit:
+            if d == "BUY":
+                trail_stop = best - tr_abs
+                if price <= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
+            else:
+                trail_stop = best + tr_abs
+                if price >= trail_stop and pos["mfe"] > 0: should_exit = True; reason = "TRAIL"
+
+    if is_bar_close:
+        last_bar_check = now_t
 
         if should_exit:
             # Verify position still exists on broker before exiting
