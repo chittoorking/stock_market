@@ -77,7 +77,7 @@ last_scan = 0
 print(f"BB+ALMA LIVE started at {datetime.now().strftime('%H:%M:%S')}", flush=True)
 print(f"Broker positions: {positions}", flush=True)
 
-last_bar_check = 0
+last_bar_check = time.time()  # first bar check 15 min from now, not immediately
 
 while datetime.now().hour < 15:
     # Get LTP for open positions
