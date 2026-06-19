@@ -10,8 +10,9 @@ import numpy as np
 ALL_STOCKS = list(SCRIP_CODES.keys())
 CAPITAL = 250_000
 MAX_POS = 3
-TRAIL_MULT = 0.01  # trail = ATR * 0.01
-SL_MULT = 0.05     # SL = ATR * 0.05 — both checked on 15-min bar close only
+TRAIL_MULT = 0.01  # trail = ATR * 0.01 (checked on 15-min bar close)
+SL_MULT = 0.05     # SL = ATR * 0.05 (checked on 15-min bar close)
+EMERGENCY_SL = 0.50 # emergency exit if price drops 0.5% mid-bar (immediate, no bar wait)
 
 def alma_calc(data, window=9, offset=0.85, sigma=6):
     m = offset*(window-1); s = window/sigma
@@ -114,8 +115,12 @@ while datetime.now().hour < 15:
 
         should_exit = False; reason = ""
 
-        # Both SL and trail check on 15-min bar close only (match backtest)
-        if is_bar_close:
+        # Emergency SL: if price drops significantly mid-bar, exit immediately
+        if d == "BUY" and price <= ep * (1 - EMERGENCY_SL/100): should_exit = True; reason = "EMERGENCY SL"
+        elif d == "SELL" and price >= ep * (1 + EMERGENCY_SL/100): should_exit = True; reason = "EMERGENCY SL"
+
+        # Regular SL and trail check on 15-min bar close (match backtest)
+        if not should_exit and is_bar_close:
             # Fetch actual 15-min bar close from API
             bars15 = get_15min_bars(sym)
             if bars15:
