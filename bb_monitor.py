@@ -72,7 +72,9 @@ positions = load_broker_positions()
 exited_cooldown = {}  # sym -> exit_time, skip for 1 scan (30 min)
 trades = []
 last_print = 0
-last_scan = 0
+# If we already have positions from broker, don't scan immediately
+# If empty, scan once on startup
+last_scan = time.time() if positions else 0
 
 print(f"BB+ALMA LIVE started at {datetime.now().strftime('%H:%M:%S')}", flush=True)
 print(f"Broker positions: {positions}", flush=True)
