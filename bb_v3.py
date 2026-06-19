@@ -74,7 +74,7 @@ print(f"Broker positions: {list(positions.keys()) if positions else 'empty'}", f
 
 # Timing
 last_scan = time.time() if positions else 0
-SCAN_INTERVAL = 1800  # 30 min
+SCAN_INTERVAL = 900   # scan every 15 min (same as bar check)
 BAR_INTERVAL = 900    # 15 min
 last_bar_check = time.time()
 
@@ -176,7 +176,7 @@ while datetime.now().hour < 15:
         signals = []
         for sym in ALL_STOCKS:
             if sym in positions: continue
-            if sym in exited_cooldown and (now_t - exited_cooldown[sym]) < 1800: continue
+            if sym in exited_cooldown and (now_t - exited_cooldown[sym]) < 900: continue
             bars15 = get_15min_bars(sym)
             if len(bars15) < 12: continue
             closes = [b['c'] for b in bars15]
