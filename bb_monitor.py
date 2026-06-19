@@ -10,7 +10,7 @@ import numpy as np
 ALL_STOCKS = list(SCRIP_CODES.keys())
 CAPITAL = 250_000
 MAX_POS = 3
-TRAIL_MULT = 0.01  # trail = ATR * 0.01 (checked on 15-min bar close)
+TRAIL_MULT = 0.25  # trail = ATR * 0.25 (~Rs 0.75 on Rs 200 stock, checked on bar close)
 SL_MULT = 0.05     # SL = ATR * 0.05 (checked on 15-min bar close)
 EMERGENCY_SL = 0.50 # emergency exit if price drops 0.5% mid-bar (immediate, no bar wait)
 
