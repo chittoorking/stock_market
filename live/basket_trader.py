@@ -82,6 +82,13 @@ SL_ATR_MULT = 0.05
 TRAIL_ATR_MULT = 0.005
 MIN_TRAIL_PCT = 0.10  # floor: never trail tighter than 0.1% (prevents sub-tick noise exits)
 LEVERAGE = 5
+
+# ═══ SESSION TOGGLES (enable/disable via env or here) ═══
+ENABLE_GAP_FILL = True       # S1: proven +Rs 1,444/day
+ENABLE_FLIPS = True          # S1b: proven +Rs 286/day
+ENABLE_PAIRS = False         # S2: marginal at Rs 50K, enable at Rs 2L+
+ENABLE_SECTOR_UNHEDGED = False  # S2b: short leader only, +Rs 173/day, enable at Rs 2L+
+ENABLE_BB_ALMA = False       # S3: entry validated, exit needs more testing
 CIRCUIT_MARGIN = 2.0  # skip stocks within 2% of circuit
 
 # ═══ WEBSOCKET URLs ═══
@@ -1559,15 +1566,20 @@ class BasketTrader:
         else:
             basket = self.scan_gaps()
 
-        # Step 4b: Launch pairs session in background
+        # Step 4b: Launch background sessions based on toggles
         import threading
-        pairs_thread = threading.Thread(target=self._run_pairs_session, daemon=True)
-        pairs_thread.start()
-        # MTF tested -Rs 1,909 on live data (33% WR vs 85% backtest). NOT deployed.
+        pairs_thread = None
+        if ENABLE_PAIRS:
+            pairs_thread = threading.Thread(target=self._run_pairs_session, daemon=True)
+            pairs_thread.start()
+            log.info('Pairs session: ENABLED')
+        else:
+            log.info('Pairs session: DISABLED (enable at Rs 2L+)')
 
         if not basket:
-            log.info('No gap fill basket today — waiting for pairs session.')
-            pairs_thread.join(timeout=60)
+            log.info('No gap fill basket today.')
+            if pairs_thread:
+                pairs_thread.join(timeout=60)
             self.price_feed.stop()
             self._save_fill_history()
             self._update_all_fill_history()
@@ -1616,10 +1628,9 @@ class BasketTrader:
         self.close_all()
 
         # Wait for background sessions to finish
-        if pairs_thread.is_alive():
+        if pairs_thread and pairs_thread.is_alive():
             log.info('Waiting for pairs session to finish...')
             pairs_thread.join(timeout=60)
-        # Pullback disabled — tested negative (44% WR in sequential sim)
 
         # Step 8: Update WR for ALL gap stocks (not just traded ones)
         self._update_all_fill_history()
