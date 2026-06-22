@@ -345,13 +345,13 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price=0,
         'exchange': 'NSE',
         'segment': 'EQUITY',
         'product': 'INTRADAY',
-        'order_type': 'MARKET' if trigger_price == 0 else 'LIMIT',
+        'order_type': 'LIMIT',  # always LIMIT — API converts MARKET to LIMIT anyway
+        'validity': 'DAY',
         'security_id': security_id,
         'qty': qty,
+        'limit_price': round(limit_price, 2),  # always required
         'algo_id': '99999',
     }
-    if trigger_price > 0 or order['order_type'] == 'LIMIT':
-        order['limit_price'] = round(limit_price, 2)
 
     # Add SL leg
     if sl_trigger and sl_limit:

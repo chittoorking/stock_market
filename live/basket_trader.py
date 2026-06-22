@@ -1136,7 +1136,15 @@ class BasketTrader:
             # Retry exit up to 3 times, but check broker before retry
             oid = None
             for attempt in range(3):
-                oid = api.place_order(sym, qty, exit_side, exit_price, order_type='MARKET')
+                # LIMIT first for exact price, falls back to MARKET if limit fails
+                oid = api.place_order(sym, qty, exit_side, exit_price, order_type='LIMIT')
+                if oid:
+                    # Wait 5s for limit fill, fallback to market if not
+                    time.sleep(5)
+                    if not self.order_feed.is_filled(oid):
+                        log.warning(f'{sym} limit exit not filled, sending MARKET')
+                        api.cancel_order(oid)
+                        oid = api.place_order(sym, qty, exit_side, exit_price, order_type='MARKET')
                 if oid is not None:
                     break
                 log.error(f'Exit {sym} attempt {attempt+1}/3 failed')
