@@ -826,34 +826,19 @@ class BasketTrader:
             c = o['candidate']
             entry = o['price']
             side = o['side']
-            # Calculate SL price for smart order
-            if side == 'SELL':
-                sl_trigger = entry * (1 + c['sl_pct'] / 100)
-                sl_limit = sl_trigger * 1.001  # small buffer above trigger
-            else:
-                sl_trigger = entry * (1 - c['sl_pct'] / 100)
-                sl_limit = sl_trigger * 0.999  # small buffer below trigger
 
             if self.paper_mode:
                 order_results[sym] = f'PAPER-{sym}-{int(time.time())}'
-                log.info(f'[PAPER] {side} {o["qty"]} {sym} @ Rs {entry:.2f} SL={sl_trigger:.2f}')
+                log.info(f'[PAPER] {side} {o["qty"]} {sym} @ Rs {entry:.2f}')
             else:
-                # Use smart order: entry + SL on exchange in one shot
-                oid = api.place_smart_order(
-                    sym, o['qty'], side, entry,
-                    trigger_price=0,  # market entry
-                    sl_trigger=round(sl_trigger, 2),
-                    sl_limit=round(sl_limit, 2),
-                )
-                if oid is None:
-                    # Fallback to regular order if smart order fails
-                    log.warning(f'{sym} smart order failed, falling back to regular')
-                    oid = api.place_order(sym, o['qty'], side, entry, order_type='MARKET')
+                # MARKET entry (guaranteed fill at 9:15)
+                # Bot manages trail/SL with LIMIT exits (no exchange SL to avoid double-exit)
+                oid = api.place_order(sym, o['qty'], side, entry, order_type='MARKET')
                 if oid is None:
                     log.error(f'FAILED to enter {sym}')
                     return
                 order_results[sym] = oid
-                log.info(f'SMART ORDER {side} {o["qty"]} {sym} SL={sl_trigger:.2f} -> {oid}')
+                log.info(f'ORDER {side} {o["qty"]} {sym} @ {entry:.2f} -> {oid}')
 
         threads = [threading.Thread(target=place_one, args=(o,)) for o in orders]
         for t in threads:
@@ -1137,29 +1122,34 @@ class BasketTrader:
             oid = None
             for attempt in range(3):
                 # LIMIT first for exact price, falls back to MARKET if limit fails
+                # Try LIMIT at exit price (get exact stop price)
                 oid = api.place_order(sym, qty, exit_side, exit_price, order_type='LIMIT')
                 if oid:
-                    # Wait 5s for limit fill, fallback to market if not
-                    time.sleep(5)
-                    if not self.order_feed.is_filled(oid):
-                        log.warning(f'{sym} limit exit not filled, sending MARKET')
-                        api.cancel_order(oid)
-                        oid = api.place_order(sym, qty, exit_side, exit_price, order_type='MARKET')
-                if oid is not None:
-                    break
-                log.error(f'Exit {sym} attempt {attempt+1}/3 failed')
-                # Before retrying, check if position is still open on broker
-                try:
-                    broker_pos = api.get_positions()
-                    still_open = any(
-                        p.get('trading_symbol', '') == sym and abs(int(p.get('net_quantity', 0))) > 0
-                        for p in broker_pos) if broker_pos else False
-                    if not still_open:
-                        log.info(f'{sym} already closed on broker — skipping retry')
-                        oid = 'already_closed'
+                    # Wait 3s for limit fill
+                    time.sleep(3)
+                    if self.order_feed.is_filled(oid):
+                        log.info(f'{sym} LIMIT exit filled')
                         break
-                except Exception:
-                    pass
+                    # Not filled — cancel and try MARKET
+                    cancelled = api.cancel_order(oid)
+                    time.sleep(1)
+                    # Verify position still open before sending MARKET
+                    try:
+                        broker_pos = api.get_positions()
+                        still_open = any(
+                            p.get('trading_symbol', '') == sym and abs(int(p.get('net_quantity', 0))) > 0
+                            for p in broker_pos) if broker_pos else False
+                    except Exception:
+                        still_open = True
+                    if not still_open:
+                        log.info(f'{sym} already closed (limit filled late) — done')
+                        break
+                    # Position still open, send MARKET
+                    log.warning(f'{sym} LIMIT not filled, sending MARKET')
+                    oid = api.place_order(sym, qty, exit_side, exit_price, order_type='MARKET')
+                    if oid:
+                        break
+                log.error(f'Exit {sym} attempt {attempt+1}/3 failed')
                 time.sleep(1)
             if oid is None:
                 log.error(f'FAILED to exit {sym} after 3 attempts — removing from tracking anyway')
