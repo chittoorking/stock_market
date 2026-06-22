@@ -960,11 +960,14 @@ class BasketTrader:
                             trail_price = entry * (1 + new_trail / 100)
                             new_sl = max(pos['trail_level'], trail_price)
 
-                        # Only modify GTT if trail moved
+                        # Only modify GTT if trail moved meaningfully (> Rs 0.50 or > 0.02%)
                         if new_sl != pos['trail_level']:
+                            diff = abs(new_sl - pos.get('last_gtt_sl', pos['sl_price']))
+                            diff_pct = diff / entry * 100 if entry > 0 else 0
                             pos['trail_level'] = new_sl
                             gtt_id = pos.get('gtt_id', '')
-                            if gtt_id and not self.paper_mode:
+                            if gtt_id and not self.paper_mode and (diff >= 0.50 or diff_pct >= 0.02):
+                                pos['last_gtt_sl'] = new_sl
                                 sl_limit = new_sl * 1.002 if direction == 'SELL' else new_sl * 0.998
                                 api.modify_smart_order(gtt_id,
                                     sl_trigger=round(new_sl, 2),
