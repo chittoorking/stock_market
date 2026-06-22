@@ -368,13 +368,52 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price=0,
         if r.status_code == 200:
             data = r.json()
             if data.get('status') == 'success':
-                oid = data.get('data', {}).get('order_id') or data.get('data', {}).get('id')
-                log.info(f'Smart order: {side} {qty} {sym} SL={sl_trigger} TGT={tgt_trigger} -> {oid}')
-                return oid
+                order_data = data.get('data', {}).get('order_data', [{}])
+                parent_id = order_data[0].get('order_id', '') if order_data else ''
+                child_data = order_data[0].get('child_order_details', {}) if order_data else {}
+                child_id = child_data.get('order_id', '')
+                log.info(f'Smart order: {side} {qty} {sym} SL={sl_trigger} -> parent={parent_id} child={child_id}')
+                return {'parent': parent_id, 'child': child_id}
         log.error(f'Smart order failed: {r.text[:300]}')
     except Exception as e:
         log.error(f'Smart order error: {e}')
     return None
+
+
+def modify_smart_order(order_id, sl_trigger=None, sl_limit=None, tgt_trigger=None, tgt_limit=None):
+    """Modify SL/target on an existing smart order (GTT)."""
+    payload = {'order_id': str(order_id), 'segment': 'EQUITY', 'algo_id': '99999'}
+    if sl_trigger and sl_limit:
+        payload['sl_trigger_price'] = round(sl_trigger, 2)
+        payload['sl_limit_price'] = round(sl_limit, 2)
+    if tgt_trigger and tgt_limit:
+        payload['tgt_trigger_price'] = round(tgt_trigger, 2)
+        payload['tgt_limit_price'] = round(tgt_limit, 2)
+    try:
+        r = requests.post(f'{BASE}/smart/order/modify', headers=headers(), json=payload, timeout=10)
+        if r.status_code == 200 and r.json().get('status') == 'success':
+            log.info(f'GTT modified: {order_id} SL={sl_trigger} TGT={tgt_trigger}')
+            return True
+        log.error(f'GTT modify failed: {r.text[:200]}')
+    except Exception as e:
+        log.error(f'GTT modify error: {e}')
+    return False
+
+
+def cancel_smart_order(order_id):
+    """Cancel a smart/GTT order."""
+    try:
+        r = requests.post(f'{BASE}/smart/order/cancel',
+                         headers=headers(),
+                         json={'order_id': str(order_id), 'segment': 'EQUITY'},
+                         timeout=10)
+        if r.status_code == 200:
+            log.info(f'GTT cancelled: {order_id}')
+            return True
+        log.error(f'GTT cancel failed: {r.text[:200]}')
+    except Exception as e:
+        log.error(f'GTT cancel error: {e}')
+    return False
 
 
 def cancel_order(order_id, segment='EQUITY'):

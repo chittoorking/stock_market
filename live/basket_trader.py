@@ -831,14 +831,28 @@ class BasketTrader:
                 order_results[sym] = f'PAPER-{sym}-{int(time.time())}'
                 log.info(f'[PAPER] {side} {o["qty"]} {sym} @ Rs {entry:.2f}')
             else:
-                # MARKET entry (guaranteed fill at 9:15)
-                # Bot manages trail/SL with LIMIT exits (no exchange SL to avoid double-exit)
+                # Step 1: MARKET entry (guaranteed fill)
                 oid = api.place_order(sym, o['qty'], side, entry, order_type='MARKET')
                 if oid is None:
                     log.error(f'FAILED to enter {sym}')
                     return
                 order_results[sym] = oid
-                log.info(f'ORDER {side} {o["qty"]} {sym} @ {entry:.2f} -> {oid}')
+
+                # Step 2: Place GTT SL on exchange (fires at exact price)
+                if side == 'SELL':
+                    sl_trigger = entry * (1 + c['sl_pct'] / 100)
+                    sl_limit = sl_trigger * 1.002
+                else:
+                    sl_trigger = entry * (1 - c['sl_pct'] / 100)
+                    sl_limit = sl_trigger * 0.998
+                # GTT: opposite side for SL exit
+                gtt_side = 'BUY' if side == 'SELL' else 'SELL'
+                gtt = api.place_smart_order(sym, o['qty'], gtt_side, sl_limit,
+                                            sl_trigger=round(sl_trigger, 2),
+                                            sl_limit=round(sl_limit, 2))
+                gtt_id = gtt.get('child', '') if isinstance(gtt, dict) else ''
+                o['gtt_id'] = gtt_id  # store for later cancel/modify
+                log.info(f'ENTRY {side} {o["qty"]} {sym} @ {entry:.2f} GTT_SL={sl_trigger:.2f} gtt={gtt_id} -> {oid}')
 
         threads = [threading.Thread(target=place_one, args=(o,)) for o in orders]
         for t in threads:
@@ -876,7 +890,8 @@ class BasketTrader:
                 'sl_pct': c['sl_pct'], 'trail_pct': c['trail_pct'],
                 'sl_price': sl_price, 'mfe': 0.0,
                 'trail_active': False, 'trail_level': trail_level,
-                'order_id': oid, 'gap': c['gap'], 'score': c['score'],
+                'order_id': oid, 'gtt_id': o.get('gtt_id', ''),
+                'gap': c['gap'], 'score': c['score'],
                 'atr_pct': c['atr_pct'],
                 'bar1_high': entry, 'bar1_low': entry, 'bar1_range': 0.0,
             }
@@ -934,34 +949,55 @@ class BasketTrader:
                             pos['bar1_range'] = (pos['bar1_high'] - pos['bar1_low']) / ep * 100 if ep > 0 else 0.0
                             pos['bar1_done'] = True
 
-                    # Trail logic
+                    # Trail logic — modify GTT on exchange instead of exiting
                     if pos['mfe'] > pos['trail_pct']:
                         pos['trail_active'] = True
                         new_trail = pos['mfe'] - pos['trail_pct']
                         if direction == 'SELL':
                             trail_price = entry * (1 - new_trail / 100)
-                            pos['trail_level'] = min(pos['trail_level'], trail_price)
+                            new_sl = min(pos['trail_level'], trail_price)
                         else:
                             trail_price = entry * (1 + new_trail / 100)
-                            pos['trail_level'] = max(pos['trail_level'], trail_price)
+                            new_sl = max(pos['trail_level'], trail_price)
 
-                    # Exit check
-                    should_exit = False; exit_reason = ''
-                    if pos['trail_active']:
-                        if direction == 'SELL' and price >= pos['trail_level']:
-                            should_exit = True
-                            exit_reason = f'TRAIL (MFE={pos["mfe"]:.3f}%)'
-                        elif direction == 'BUY' and price <= pos['trail_level']:
-                            should_exit = True
-                            exit_reason = f'TRAIL (MFE={pos["mfe"]:.3f}%)'
-                    else:
-                        if direction == 'SELL' and price >= pos['sl_price']:
-                            should_exit = True; exit_reason = 'STOP LOSS'
-                        elif direction == 'BUY' and price <= pos['sl_price']:
-                            should_exit = True; exit_reason = 'STOP LOSS'
+                        # Only modify GTT if trail moved
+                        if new_sl != pos['trail_level']:
+                            pos['trail_level'] = new_sl
+                            gtt_id = pos.get('gtt_id', '')
+                            if gtt_id and not self.paper_mode:
+                                sl_limit = new_sl * 1.002 if direction == 'SELL' else new_sl * 0.998
+                                api.modify_smart_order(gtt_id,
+                                    sl_trigger=round(new_sl, 2),
+                                    sl_limit=round(sl_limit, 2))
 
-                    if should_exit:
-                        self.exit_position(sym, price, exit_reason)
+                    # Check if position still exists on broker (GTT may have fired)
+                    if not self.paper_mode and sym in self.positions:
+                        # Check every 10 seconds
+                        if int(time.time()) % 10 == 0:
+                            try:
+                                broker_pos = api.get_positions()
+                                still_open = any(
+                                    (p.get('trading_symbol', '') == sym or p.get('symbol', '') == sym)
+                                    and abs(int(p.get('net_quantity', p.get('net_qty', 0)))) > 0
+                                    for p in broker_pos) if broker_pos else False
+                                if not still_open:
+                                    # GTT fired on exchange — position closed
+                                    log.info(f'{sym} GTT fired on exchange — position closed')
+                                    pnl_pct = (pos['trail_level'] - entry) / entry * 100 if direction == 'BUY' else (entry - pos['trail_level']) / entry * 100
+                                    pnl_rs = pnl_pct / 100 * (entry * qty)
+                                    self.daily_pnl += pnl_rs
+                                    log.info(f'{sym}: {direction} {entry:.2f}->~{pos["trail_level"]:.2f} '
+                                             f'{pnl_pct:+.3f}% Rs {pnl_rs:+,.0f} (GTT EXIT)')
+                                    self.daily_trades.append({
+                                        'sym': sym, 'direction': direction,
+                                        'entry': entry, 'exit': pos['trail_level'],
+                                        'pnl_pct': pnl_pct, 'pnl_rs': pnl_rs,
+                                        'reason': 'GTT EXIT', 'gap': pos['gap'],
+                                    })
+                                    del self.positions[sym]
+                                    continue
+                            except Exception:
+                                pass
 
                     if price > 0:
                         last_price_time = time.time()
@@ -1111,6 +1147,11 @@ class BasketTrader:
         pos = self.positions.get(sym)
         if not pos:
             return
+
+        # Cancel GTT SL on exchange first (prevent double exit)
+        gtt_id = pos.get('gtt_id', '')
+        if gtt_id and not self.paper_mode:
+            api.cancel_smart_order(gtt_id)
 
         qty = pos['qty']; direction = pos['direction']; entry = pos['entry']
         exit_side = 'BUY' if direction == 'SELL' else 'SELL'
