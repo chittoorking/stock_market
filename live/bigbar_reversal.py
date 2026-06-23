@@ -46,12 +46,16 @@ def bb_mid(data, period=BB_PERIOD):
     return result
 
 
+MIN_CAPITAL_PER_TRADE = 20000  # Rs 20K minimum per trade (with leverage)
+
+
 class BigBarTrader:
-    def __init__(self, capital, price_feed, order_feed, paper_mode=True):
+    def __init__(self, capital, price_feed, order_feed, paper_mode=True, capital_pool=None):
         self.capital = capital
         self.price_feed = price_feed
         self.order_feed = order_feed
         self.paper_mode = paper_mode
+        self.capital_pool = capital_pool  # shared with gap fill
         self.positions = {}       # sym -> position dict
         self.prev_bars = {}       # sym -> list of recent bar closes (for ALMA/BB)
         self.current_bar = {}     # sym -> {'o','h','l','c'} building current bar
@@ -137,8 +141,33 @@ class BigBarTrader:
         return {'action': 'ENTER', 'sym': sym, 'direction': direction,
                 'price': bar['c'], 'body_pct': body_pct}
 
+    def get_available_capital(self):
+        """Get available capital directly from exchange."""
+        try:
+            funds = api.get_funds()
+            return funds * 5  # with leverage
+        except Exception:
+            return 0
+
     def enter_position(self, sym, direction, price, qty):
         """Enter a position."""
+        # Check available capital
+        needed = price * qty
+        available = self.get_available_capital()
+        locked_in_positions = sum(p['entry'] * p['qty'] for p in self.positions.values())
+        free = available - locked_in_positions
+
+        if free < MIN_CAPITAL_PER_TRADE:
+            log.info(f'[BIGBAR] Skip {sym}: free capital Rs {free:,.0f} < Rs {MIN_CAPITAL_PER_TRADE:,}')
+            return False
+
+        if needed > free:
+            # Reduce qty to fit
+            qty = int(free / price)
+            if qty <= 0:
+                log.info(f'[BIGBAR] Skip {sym}: not enough capital')
+                return False
+
         if self.paper_mode:
             oid = f'PAPER-BB-{sym}-{int(time.time())}'
             log.info(f'[PAPER][BIGBAR] {direction} {qty} {sym} @ {price:.2f}')
@@ -147,7 +176,7 @@ class BigBarTrader:
             if not oid:
                 log.error(f'[BIGBAR] Failed to enter {sym}')
                 return False
-            log.info(f'[BIGBAR] {direction} {qty} {sym} @ {price:.2f} -> {oid}')
+            log.info(f'[BIGBAR] {direction} {qty} {sym} @ {price:.2f} (capital: Rs {free:,.0f} free) -> {oid}')
 
         self.positions[sym] = {
             'direction': direction,

@@ -1624,7 +1624,8 @@ class BasketTrader:
         if ENABLE_BIGBAR:
             from .bigbar_reversal import BigBarTrader
             bb_trader = BigBarTrader(self.total_capital, self.price_feed,
-                                     self.order_feed, self.paper_mode)
+                                     self.order_feed, self.paper_mode,
+                                     capital_pool=self.capital_pool)
             bigbar_thread = threading.Thread(
                 target=lambda: bb_trader.run(ALL_STOCKS), daemon=True)
             bigbar_thread.start()
