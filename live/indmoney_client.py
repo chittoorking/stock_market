@@ -340,28 +340,33 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price=0,
 
     security_id = scrip.split('_')[1]
 
+    # NSE tick size: Rs 0.05 for price < 250, Rs 0.10 for >= 250
+    def tick_round(price):
+        tick = 0.05 if price < 250 else 0.10
+        return round(round(price / tick) * tick, 2)
+
     order = {
         'txn_type': side,
         'exchange': 'NSE',
         'segment': 'EQUITY',
         'product': 'INTRADAY',
-        'order_type': 'LIMIT',  # always LIMIT — API converts MARKET to LIMIT anyway
+        'order_type': 'LIMIT',
         'validity': 'DAY',
         'security_id': security_id,
         'qty': qty,
-        'limit_price': round(limit_price, 2),  # always required
+        'limit_price': tick_round(limit_price),
         'algo_id': '99999',
     }
 
     # Add SL leg
     if sl_trigger and sl_limit:
-        order['sl_trigger_price'] = round(sl_trigger, 2)
-        order['sl_limit_price'] = round(sl_limit, 2)
+        order['sl_trigger_price'] = tick_round(sl_trigger)
+        order['sl_limit_price'] = tick_round(sl_limit)
 
     # Add target leg
     if tgt_trigger and tgt_limit:
-        order['tgt_trigger_price'] = round(tgt_trigger, 2)
-        order['tgt_limit_price'] = round(tgt_limit, 2)
+        order['tgt_trigger_price'] = tick_round(tgt_trigger)
+        order['tgt_limit_price'] = tick_round(tgt_limit)
 
     try:
         r = requests.post(f'{BASE}/smart/order', headers=headers(), json=order, timeout=10)
