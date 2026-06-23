@@ -142,10 +142,10 @@ class BigBarTrader:
                 'price': bar['c'], 'body_pct': body_pct}
 
     def get_available_capital(self):
-        """Get available capital directly from exchange."""
+        """Get available capital directly from exchange, with 5% buffer."""
         try:
             funds = api.get_funds()
-            return funds * 5  # with leverage
+            return funds * 0.95 * 5  # 5% buffer + leverage
         except Exception:
             return 0
 
