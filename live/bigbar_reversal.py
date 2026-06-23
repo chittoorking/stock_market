@@ -94,6 +94,30 @@ class BigBarTrader:
         # Check existing positions — exit after HOLD_BARS
         if sym in self.positions:
             pos = self.positions[sym]
+            # If GTT entry, check if it actually filled on broker
+            if pos.get('gtt_entry') and pos.get('pending'):
+                try:
+                    broker_pos = api.get_positions()
+                    filled = any(
+                        (p.get('symbol', '') == sym or p.get('trading_symbol', '') == sym)
+                        and abs(int(p.get('net_quantity', p.get('net_qty', 0)))) > 0
+                        for p in broker_pos) if broker_pos else False
+                    if filled:
+                        pos['pending'] = False
+                        log.info(f'[BIGBAR] GTT entry filled for {sym}')
+                    else:
+                        pos['bars_waited'] = pos.get('bars_waited', 0) + 1
+                        if pos['bars_waited'] >= 2:
+                            # GTT didn't fire in 2 bars — cancel and remove
+                            oid = pos.get('order_id', '')
+                            if oid and not self.paper_mode:
+                                api.cancel_smart_order(oid)
+                            log.info(f'[BIGBAR] GTT expired for {sym} — cancelled')
+                            del self.positions[sym]
+                        return None
+                except Exception:
+                    pass
+
             pos['bars_held'] += 1
             if pos['bars_held'] >= HOLD_BARS:
                 return {'action': 'EXIT', 'sym': sym, 'price': bar['c'],
@@ -138,8 +162,17 @@ class BigBarTrader:
                 return None
             direction = 'SELL'
 
+        # Calculate GTT trigger price (5% of bar range above/below close)
+        rng = bar['h'] - bar['l']
+        trigger_dist = rng * 0.05
+        if direction == 'BUY':
+            trigger_price = bar['c'] + trigger_dist  # bounce UP to trigger
+        else:
+            trigger_price = bar['c'] - trigger_dist  # bounce DOWN to trigger
+
         return {'action': 'ENTER', 'sym': sym, 'direction': direction,
-                'price': bar['c'], 'body_pct': body_pct}
+                'price': bar['c'], 'trigger_price': round(trigger_price, 2),
+                'body_pct': body_pct, 'range': rng}
 
     def get_available_capital(self):
         """Get available capital directly from exchange, with 5% buffer."""
@@ -149,8 +182,8 @@ class BigBarTrader:
         except Exception:
             return 0
 
-    def enter_position(self, sym, direction, price, qty):
-        """Enter a position."""
+    def enter_position(self, sym, direction, price, qty, trigger_price=None):
+        """Enter a position via GTT (bounce confirmation, zero slippage)."""
         # Check available capital
         needed = price * qty
         available = self.get_available_capital()
@@ -162,29 +195,46 @@ class BigBarTrader:
             return False
 
         if needed > free:
-            # Reduce qty to fit
             qty = int(free / price)
             if qty <= 0:
                 log.info(f'[BIGBAR] Skip {sym}: not enough capital')
                 return False
 
+        entry_price = trigger_price or price
+
         if self.paper_mode:
             oid = f'PAPER-BB-{sym}-{int(time.time())}'
-            log.info(f'[PAPER][BIGBAR] {direction} {qty} {sym} @ {price:.2f}')
+            log.info(f'[PAPER][BIGBAR] {direction} {qty} {sym} trigger={entry_price:.2f}')
         else:
-            oid = api.place_order(sym, qty, direction, price, order_type='MARKET')
-            if not oid:
-                log.error(f'[BIGBAR] Failed to enter {sym}')
-                return False
-            log.info(f'[BIGBAR] {direction} {qty} {sym} @ {price:.2f} (capital: Rs {free:,.0f} free) -> {oid}')
+            # Place GTT: trigger at bounce price, SL for protection
+            sl_price = price * (1 - EMERGENCY_SL_PCT/100) if direction == 'BUY' else price * (1 + EMERGENCY_SL_PCT/100)
+            gtt = api.place_smart_order(
+                sym, qty, direction, entry_price,
+                sl_trigger=round(sl_price, 2),
+                sl_limit=round(sl_price * (0.998 if direction == 'BUY' else 1.002), 2),
+            )
+            if not gtt:
+                # Fallback to MARKET
+                log.warning(f'[BIGBAR] GTT failed for {sym}, using MARKET')
+                oid = api.place_order(sym, qty, direction, price, order_type='MARKET')
+                if not oid:
+                    log.error(f'[BIGBAR] Failed to enter {sym}')
+                    return False
+                entry_price = price
+            else:
+                oid = gtt.get('parent', '') if isinstance(gtt, dict) else gtt
+            log.info(f'[BIGBAR] GTT {direction} {qty} {sym} trigger={entry_price:.2f} -> {oid}')
 
         self.positions[sym] = {
             'direction': direction,
-            'entry': price,
+            'entry': entry_price,
             'qty': qty,
             'order_id': oid,
             'bars_held': 0,
             'entry_time': time.time(),
+            'gtt_entry': trigger_price is not None,
+            'pending': trigger_price is not None,  # GTT not filled yet
+            'bars_waited': 0,
         }
         return True
 
@@ -327,7 +377,8 @@ class BigBarTrader:
                         qty = int(self.capital / 5 / signal['price'])
                         if qty > 0:
                             self.enter_position(sym, signal['direction'],
-                                                signal['price'], qty)
+                                                signal['price'], qty,
+                                                trigger_price=signal.get('trigger_price'))
 
                     elif signal['action'] == 'EXIT':
                         self.exit_position(sym, signal['price'], signal['reason'])
