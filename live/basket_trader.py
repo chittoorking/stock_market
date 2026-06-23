@@ -89,6 +89,7 @@ ENABLE_FLIPS = True          # S1b: proven +Rs 286/day
 ENABLE_PAIRS = False         # S2: marginal at Rs 50K, enable at Rs 2L+
 ENABLE_SECTOR_UNHEDGED = False  # S2b: short leader only, +Rs 173/day, enable at Rs 2L+
 ENABLE_BB_ALMA = False       # S3: entry validated, exit needs more testing
+ENABLE_BIGBAR = True         # S4: big bar reversal, Rs 530/trade, 87% WR, all day
 CIRCUIT_MARGIN = 2.0  # skip stocks within 2% of circuit
 
 # ═══ WEBSOCKET URLs ═══
@@ -1618,10 +1619,25 @@ class BasketTrader:
         else:
             log.info('Pairs session: DISABLED (enable at Rs 2L+)')
 
+        # Big Bar Reversal — runs all day (10:00-14:30)
+        bigbar_thread = None
+        if ENABLE_BIGBAR:
+            from .bigbar_reversal import BigBarTrader
+            bb_trader = BigBarTrader(self.total_capital, self.price_feed,
+                                     self.order_feed, self.paper_mode)
+            bigbar_thread = threading.Thread(
+                target=lambda: bb_trader.run(ALL_STOCKS), daemon=True)
+            bigbar_thread.start()
+            log.info('Big Bar Reversal: ENABLED (10:00-14:30)')
+        else:
+            log.info('Big Bar Reversal: DISABLED')
+
         if not basket:
             log.info('No gap fill basket today.')
             if pairs_thread:
                 pairs_thread.join(timeout=60)
+            if bigbar_thread:
+                bigbar_thread.join(timeout=18000)
             self.price_feed.stop()
             self._save_fill_history()
             self._update_all_fill_history()
@@ -1673,6 +1689,13 @@ class BasketTrader:
         if pairs_thread and pairs_thread.is_alive():
             log.info('Waiting for pairs session to finish...')
             pairs_thread.join(timeout=60)
+        if bigbar_thread and bigbar_thread.is_alive():
+            log.info('Waiting for big bar session to finish...')
+            bigbar_thread.join(timeout=60)
+            # Add bigbar P&L to daily total
+            if ENABLE_BIGBAR:
+                self.daily_pnl += bb_trader.daily_pnl
+                self.daily_trades.extend(bb_trader.daily_trades)
 
         # Step 8: Update WR for ALL gap stocks (not just traded ones)
         self._update_all_fill_history()
