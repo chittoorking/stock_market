@@ -314,9 +314,9 @@ class BigBarTrader:
         log.info(f'Max {MAX_POSITIONS} positions, hold {HOLD_BARS} bar(s)')
         log.info('=' * 60)
 
-        # Wait for 10:00
+        # Wait for 9:40 (after gap fill is done at 9:35)
         now = datetime.now()
-        start = now.replace(hour=10, minute=0, second=0, microsecond=0)
+        start = now.replace(hour=9, minute=40, second=0, microsecond=0)
         if now < start:
             wait = (start - now).total_seconds()
             log.info(f'Waiting {wait:.0f}s for 10:00...')
