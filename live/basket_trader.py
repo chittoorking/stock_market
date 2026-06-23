@@ -843,21 +843,9 @@ class BasketTrader:
                     return
                 order_results[sym] = oid
 
-                # Step 2: Place GTT SL on exchange (fires at exact price)
-                if side == 'SELL':
-                    sl_trigger = entry * (1 + c['sl_pct'] / 100)
-                    sl_limit = sl_trigger * 1.002
-                else:
-                    sl_trigger = entry * (1 - c['sl_pct'] / 100)
-                    sl_limit = sl_trigger * 0.998
-                # GTT: opposite side for SL exit
-                gtt_side = 'BUY' if side == 'SELL' else 'SELL'
-                gtt = api.place_smart_order(sym, o['qty'], gtt_side, sl_limit,
-                                            sl_trigger=round(sl_trigger, 2),
-                                            sl_limit=round(sl_limit, 2))
-                gtt_id = gtt.get('child', '') if isinstance(gtt, dict) else ''
-                o['gtt_id'] = gtt_id  # store for later cancel/modify
-                log.info(f'ENTRY {side} {o["qty"]} {sym} @ {entry:.2f} GTT_SL={sl_trigger:.2f} gtt={gtt_id} -> {oid}')
+                # Bot manages trail/SL via WebSocket monitoring + LIMIT exits
+                o['gtt_id'] = ''
+                log.info(f'ENTRY {side} {o["qty"]} {sym} @ {entry:.2f} -> {oid}')
 
         threads = [threading.Thread(target=place_one, args=(o,)) for o in orders]
         for t in threads:
@@ -977,35 +965,6 @@ class BasketTrader:
                                 api.modify_smart_order(gtt_id,
                                     sl_trigger=round(new_sl, 2),
                                     sl_limit=round(sl_limit, 2))
-
-                    # Check if position still exists on broker (GTT may have fired)
-                    if not self.paper_mode and sym in self.positions:
-                        # Check every 10 seconds
-                        if int(time.time()) % 10 == 0:
-                            try:
-                                broker_pos = api.get_positions()
-                                still_open = any(
-                                    (p.get('trading_symbol', '') == sym or p.get('symbol', '') == sym)
-                                    and abs(int(p.get('net_quantity', p.get('net_qty', 0)))) > 0
-                                    for p in broker_pos) if broker_pos else False
-                                if not still_open:
-                                    # GTT fired on exchange — position closed
-                                    log.info(f'{sym} GTT fired on exchange — position closed')
-                                    pnl_pct = (pos['trail_level'] - entry) / entry * 100 if direction == 'BUY' else (entry - pos['trail_level']) / entry * 100
-                                    pnl_rs = pnl_pct / 100 * (entry * qty)
-                                    self.daily_pnl += pnl_rs
-                                    log.info(f'{sym}: {direction} {entry:.2f}->~{pos["trail_level"]:.2f} '
-                                             f'{pnl_pct:+.3f}% Rs {pnl_rs:+,.0f} (GTT EXIT)')
-                                    self.daily_trades.append({
-                                        'sym': sym, 'direction': direction,
-                                        'entry': entry, 'exit': pos['trail_level'],
-                                        'pnl_pct': pnl_pct, 'pnl_rs': pnl_rs,
-                                        'reason': 'GTT EXIT', 'gap': pos['gap'],
-                                    })
-                                    del self.positions[sym]
-                                    continue
-                            except Exception:
-                                pass
 
                     if price > 0:
                         last_price_time = time.time()

@@ -69,10 +69,13 @@ class BigBarTrader:
         """Load recent bar history from API for ALMA calculation."""
         try:
             now_ms = int(time.time() * 1000)
-            start_ms = now_ms - 8 * 3600 * 1000  # 8 hours
+            start_ms = now_ms - 30 * 3600 * 1000  # 30 hours (covers prev day)
             candles = api.get_historical_candles(sym, "5minute", start_ms, now_ms)
             if candles:
-                self.prev_bars[sym] = [c['c'] for c in candles]
+                self.prev_bars[sym] = {
+                    'closes': [c['c'] for c in candles],
+                    'bars': [{'o':c['o'],'h':c['h'],'l':c['l'],'c':c['c']} for c in candles],
+                }
                 return True
         except Exception as e:
             log.error(f'History load error for {sym}: {e}')
@@ -82,12 +85,15 @@ class BigBarTrader:
         """Called when a 5-min bar completes. This is where signals are detected."""
         # Update history
         if sym not in self.prev_bars:
-            self.prev_bars[sym] = []
-        self.prev_bars[sym].append(bar['c'])
-        # Keep last 50 bars
-        self.prev_bars[sym] = self.prev_bars[sym][-50:]
+            self.prev_bars[sym] = {'closes': [], 'bars': []}
+        self.prev_bars[sym]['closes'].append(bar['c'])
+        self.prev_bars[sym]['bars'].append(bar)
+        self.prev_bars[sym]['closes'] = self.prev_bars[sym]['closes'][-50:]
+        self.prev_bars[sym]['bars'] = self.prev_bars[sym]['bars'][-50:]
 
-        closes = self.prev_bars[sym]
+        hist = self.prev_bars[sym]
+        closes = hist['closes']
+        prev_bars_list = hist['bars']
         if len(closes) < 20:
             return None  # not enough history
 
@@ -141,11 +147,10 @@ class BigBarTrader:
         if body_pct < MIN_BODY_PCT:
             return None
 
-        # Filter 2: isolated (prev bar opposite direction)
-        if len(closes) >= 2:
-            prev_close = closes[-2]
-            prev_prev = closes[-3] if len(closes) >= 3 else prev_close
-            prev_body = prev_close - prev_prev
+        # Filter 2: isolated (prev bar opposite direction — use actual bar body)
+        if len(prev_bars_list) >= 2:
+            prev_bar = prev_bars_list[-2]
+            prev_body = prev_bar['c'] - prev_bar['o']
             if prev_body * body > 0:  # same direction = trend, skip
                 return None
 

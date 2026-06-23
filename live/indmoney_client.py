@@ -73,6 +73,12 @@ SYM_FROM_SCRIP = {v: k for k, v in SCRIP_CODES.items()}
 SYM_FROM_SEC_ID = {v.split('_')[1]: k for k, v in SCRIP_CODES.items()}
 
 
+def tick_round(price):
+    """Round price to NSE tick size: Rs 0.05 for < Rs 250, Rs 0.10 for >= Rs 250."""
+    tick = 0.05 if price < 250 else 0.10
+    return round(round(price / tick) * tick, 2)
+
+
 def get_token():
     """Get access token from file."""
     if TOKEN_FILE.exists():
@@ -294,7 +300,7 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', 
     }
 
     if order_type == 'LIMIT':
-        order['limit_price'] = round(price, 2)
+        order['limit_price'] = tick_round(price)
 
     # For stop loss: use smart order
     if trigger_price > 0:
@@ -340,11 +346,6 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price=0,
 
     security_id = scrip.split('_')[1]
 
-    # NSE tick size: Rs 0.05 for price < 250, Rs 0.10 for >= 250
-    def tick_round(price):
-        tick = 0.05 if price < 250 else 0.10
-        return round(round(price / tick) * tick, 2)
-
     order = {
         'txn_type': side,
         'exchange': 'NSE',
@@ -389,11 +390,11 @@ def modify_smart_order(order_id, sl_trigger=None, sl_limit=None, tgt_trigger=Non
     """Modify SL/target on an existing smart order (GTT)."""
     payload = {'order_id': str(order_id), 'segment': 'EQUITY', 'algo_id': '99999'}
     if sl_trigger and sl_limit:
-        payload['sl_trigger_price'] = round(sl_trigger, 2)
-        payload['sl_limit_price'] = round(sl_limit, 2)
+        payload['sl_trigger_price'] = tick_round(sl_trigger)
+        payload['sl_limit_price'] = tick_round(sl_limit)
     if tgt_trigger and tgt_limit:
-        payload['tgt_trigger_price'] = round(tgt_trigger, 2)
-        payload['tgt_limit_price'] = round(tgt_limit, 2)
+        payload['tgt_trigger_price'] = tick_round(tgt_trigger)
+        payload['tgt_limit_price'] = tick_round(tgt_limit)
     try:
         r = requests.post(f'{BASE}/smart/order/modify', headers=headers(), json=payload, timeout=10)
         if r.status_code == 200 and r.json().get('status') == 'success':
