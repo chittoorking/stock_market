@@ -81,6 +81,7 @@ MAX_BASKET = 10
 SL_ATR_MULT = 0.20  # 0.05 was too tight for tick data at 9:15 — triggered on noise
 TRAIL_ATR_MULT = 0.005
 MIN_TRAIL_PCT = 0.10  # floor: never trail tighter than 0.1% (prevents sub-tick noise exits)
+FLIP_BUFFER_ATR = 0.05  # buffer beyond SL before flip entry (ATR × 0.05)
 LEVERAGE = 5
 
 # ═══ SESSION TOGGLES (enable/disable via env or here) ═══
@@ -1001,14 +1002,15 @@ class BasketTrader:
                 if int(time.time()) % 10 == 0 and self.positions:
                     self._print_live_pnl()
 
-                # [FEATURE 7] Flip monitor — only until 9:20 (gaps fill in first 5 min)
+                # [FEATURE 7] Flip monitor — tick-by-tick trigger check
                 now = datetime.now()
-                if now.second < 2 and now.minute % 5 == 0 and self.flip_candidates:
-                    if now.hour == 9 and now.minute <= 20:
-                        self._check_flip_entries()
-                    elif now.hour == 9 and now.minute > 20:
+                if self.flip_candidates:
+                    # Cutoff: no new flips after 9:20
+                    if now.hour == 9 and now.minute > 20:
                         log.info('Past 9:20 — clearing flip candidates')
                         self.flip_candidates.clear()
+                    else:
+                        self._check_flip_triggers()
 
                 # Exit loop if nothing to do
                 if not self.positions and not self.flip_candidates:
@@ -1035,17 +1037,10 @@ class BasketTrader:
     # [FEATURE 7] FLIP ON PURE SL — bar-close confirmation
     # ═══════════════════════════════════════════════════════════
 
-    def _check_flip_entries(self):
-        """At each 5-min bar boundary: check if any SL-stopped stock confirmed flip direction."""
-        now = datetime.now()
-        # No flips after 2:30 PM — not enough time to trail
-        if now.hour > 14 or (now.hour == 14 and now.minute >= 30):
-            self.flip_candidates.clear()
-            return
-
+    def _check_flip_triggers(self):
+        """Tick-by-tick: if price breaches trigger (SL + ATR buffer), enter flip immediately."""
         to_remove = []
         for sym, fc in list(self.flip_candidates.items()):
-            # Skip if already in a position (re-entered by another signal)
             if sym in self.positions:
                 to_remove.append(sym)
                 continue
@@ -1054,62 +1049,51 @@ class BasketTrader:
             if price <= 0:
                 continue
 
-            fc['bars_watched'] += 1
-
-            # Check if this bar closed in flip direction vs previous bar close
-            prev_close = fc['sl_bar_close']
             flip_dir = fc['flip_dir']
-            confirmed = (price < prev_close) if flip_dir == 'SELL' else (price > prev_close)
+            trigger = fc['trigger']
+            breached = (price <= trigger) if flip_dir == 'SELL' else (price >= trigger)
 
-            if confirmed:
-                # Real order book filter — skip if depth strongly against flip direction
-                depth_score = self.get_depth_score(sym, flip_dir)
-                if depth_score == 0:
-                    log.info(f'[FLIP] {sym}: order book against {flip_dir} — skipping')
+            if not breached:
+                # Expire after 5 min if trigger never hit — move was just a wick
+                if time.time() - fc['queued_at'] > 300:
+                    log.info(f'[FLIP] {sym}: trigger {trigger:.2f} not hit in 5 min — dropping')
                     to_remove.append(sym)
-                    continue
+                continue
 
-                # Enter flip trade at current price (next bar open)
-                atr_p = fc['atr_pct']
-                sl_abs = atr_p * SL_ATR_MULT / 100 * price
-                trail_pct = max(atr_p * TRAIL_ATR_MULT, MIN_TRAIL_PCT)
-                sl_price = (price + sl_abs) if flip_dir == 'SELL' else (price - sl_abs)
-                capital = fc['capital']
-                qty = int(capital / price)
+            # Triggered — enter flip immediately
+            atr_p = fc['atr_pct']
+            sl_abs = atr_p * SL_ATR_MULT / 100 * price
+            trail_pct = max(atr_p * TRAIL_ATR_MULT, MIN_TRAIL_PCT)
+            sl_price = (price + sl_abs) if flip_dir == 'SELL' else (price - sl_abs)
+            capital = fc['capital']
+            qty = int(capital / price)
 
-                if qty > 0:
-                    if self.paper_mode:
-                        log.info(f'[PAPER][FLIP] {flip_dir} {qty} {sym} @ Rs {price:.2f} '
-                                 f'(SL={sl_price:.2f}, depth={depth_score:.2f})')
-                    else:
-                        oid = api.place_order(sym, qty, flip_dir, price, order_type='MARKET')
-                        if oid is None:
-                            log.error(f'[FLIP] Failed to enter {sym}')
-                            to_remove.append(sym)
-                            continue
+            if qty > 0:
+                if self.paper_mode:
+                    log.info(f'[PAPER][FLIP] {flip_dir} {qty} {sym} @ Rs {price:.2f} '
+                             f'(SL={sl_price:.2f}, trigger={trigger:.2f})')
+                else:
+                    oid = api.place_order(sym, qty, flip_dir, price, order_type='MARKET')
+                    if oid is None:
+                        log.error(f'[FLIP] Failed to enter {sym}')
+                        to_remove.append(sym)
+                        continue
 
-                    self.positions[sym] = {
-                        'direction': flip_dir,
-                        'entry': price,
-                        'qty': qty,
-                        'sl_price': sl_price,
-                        'trail_pct': trail_pct,
-                        'trail_active': False,
-                        'trail_level': sl_price,
-                        'mfe': 0.0,
-                        'atr_pct': atr_p,
-                        'gap': 0,  # flip trade, no gap
-                        'is_flip': True,
-                    }
-                    log.info(f'[FLIP] {sym}: {flip_dir} entered @ Rs {price:.2f} after {fc["bars_watched"]} bars')
-                to_remove.append(sym)
-            else:
-                # Update bar close for next comparison
-                fc['sl_bar_close'] = price
-                # Expire after 6 bars (~30 min) if no confirmation
-                if fc['bars_watched'] >= 6:
-                    log.info(f'[FLIP] {sym}: no confirmation after 6 bars — dropping')
-                    to_remove.append(sym)
+                self.positions[sym] = {
+                    'direction': flip_dir,
+                    'entry': price,
+                    'qty': qty,
+                    'sl_price': sl_price,
+                    'trail_pct': trail_pct,
+                    'trail_active': False,
+                    'trail_level': sl_price,
+                    'mfe': 0.0,
+                    'atr_pct': atr_p,
+                    'gap': 0,
+                    'is_flip': True,
+                }
+                log.info(f'[FLIP] {sym}: {flip_dir} entered @ Rs {price:.2f} (trigger={trigger:.2f})')
+            to_remove.append(sym)
 
         for sym in to_remove:
             self.flip_candidates.pop(sym, None)
@@ -1228,22 +1212,26 @@ class BasketTrader:
         self.fill_history[sym] = self.fill_history[sym][-50:]
 
         # Register flip candidate if pure SL hit (MFE < 0.05% — never moved in our favor)
-        # No filter — backtest shows unfiltered gives Rs+523/day vs Rs+136 filtered
-        # 65% WR, AvgRs+271, charges ~Rs80 → net Rs+191/flip, 1.93 flips/day
+        # Tick-by-tick: if price breaches SL + ATR buffer → enter flip immediately
         if 'STOP' in reason and pos.get('mfe', 1.0) < 0.05:
             flip_dir = 'BUY' if direction == 'SELL' else 'SELL'
             atr_p = pos.get('atr_pct', 0.0)
+            buffer = atr_p * FLIP_BUFFER_ATR / 100 * exit_price
+            # Trigger is beyond SL in the flip direction
+            if flip_dir == 'SELL':
+                trigger = exit_price - buffer  # price must drop further
+            else:
+                trigger = exit_price + buffer  # price must rise further
             self.flip_candidates[sym] = {
                 'flip_dir': flip_dir,
+                'trigger': trigger,
                 'sl_price': exit_price,
-                'sl_bar_close': exit_price,   # updated at next bar boundary
                 'atr_pct': atr_p,
                 'trail_pct': pos.get('trail_pct', MIN_TRAIL_PCT),
                 'capital': entry * qty,
-                'confirmed': False,
-                'bars_watched': 0,
+                'queued_at': time.time(),
             }
-            log.info(f'[FLIP] {sym} pure SL hit — queued {flip_dir}')
+            log.info(f'[FLIP] {sym} pure SL hit — queued {flip_dir} trigger={trigger:.2f} (SL={exit_price:.2f} + buffer={buffer:.2f})')
 
         del self.positions[sym]
 
