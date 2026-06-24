@@ -129,7 +129,7 @@ def get_full_quote(syms):
         return {}
     result = {}
     # Batch in groups of 15 to avoid URL length limits
-    batch_size = 15
+    batch_size = 30
     for batch_start in range(0, len(scrips), batch_size):
         batch = scrips[batch_start:batch_start + batch_size]
         keys = ','.join(batch)
@@ -165,7 +165,7 @@ def get_market_depth(syms):
         return {}
     result = {}
     # Batch in groups of 15
-    batch_size = 15
+    batch_size = 30
     for batch_start in range(0, len(scrips), batch_size):
         batch = scrips[batch_start:batch_start + batch_size]
         keys = ','.join(batch)
