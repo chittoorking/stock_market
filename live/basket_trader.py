@@ -966,6 +966,24 @@ class BasketTrader:
                                     sl_trigger=round(new_sl, 2),
                                     sl_limit=round(sl_limit, 2))
 
+                    # EXIT CHECK — trail and SL
+                    should_exit = False; exit_reason = ''
+                    if pos['trail_active']:
+                        if direction == 'SELL' and price >= pos['trail_level']:
+                            should_exit = True
+                            exit_reason = f'TRAIL (MFE={pos["mfe"]:.3f}%)'
+                        elif direction == 'BUY' and price <= pos['trail_level']:
+                            should_exit = True
+                            exit_reason = f'TRAIL (MFE={pos["mfe"]:.3f}%)'
+                    if not should_exit:
+                        if direction == 'SELL' and price >= pos['sl_price']:
+                            should_exit = True; exit_reason = 'STOP LOSS'
+                        elif direction == 'BUY' and price <= pos['sl_price']:
+                            should_exit = True; exit_reason = 'STOP LOSS'
+
+                    if should_exit:
+                        self.exit_position(sym, price, exit_reason)
+
                     if price > 0:
                         last_price_time = time.time()
 
