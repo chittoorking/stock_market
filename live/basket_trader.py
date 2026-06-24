@@ -909,7 +909,8 @@ class BasketTrader:
         last_price_time = time.time()
         MAX_NO_PRICE_SECS = 300  # 5 minutes without any price = something is wrong
 
-        while self.positions:
+        close_time = datetime.now().replace(hour=15, minute=15, second=0, microsecond=0)
+        while datetime.now() < close_time:
             try:
                 for sym in list(self.positions.keys()):
                     if sym not in self.positions:
@@ -1003,6 +1004,14 @@ class BasketTrader:
                 now = datetime.now()
                 if now.second < 2 and now.minute % 5 == 0 and self.flip_candidates:
                     self._check_flip_entries()
+
+                # Exit loop if nothing to do (no positions, no flip candidates)
+                if not self.positions and not self.flip_candidates:
+                    # Wait 1 more minute in case flips are still being registered
+                    time.sleep(60)
+                    if not self.positions and not self.flip_candidates:
+                        log.info('No positions and no flip candidates — exiting monitor')
+                        break
 
                 # Force close at 3:15 PM — don't hold past market close
                 if now.hour > 15 or (now.hour == 15 and now.minute >= 15):
