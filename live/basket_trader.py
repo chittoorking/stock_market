@@ -82,6 +82,7 @@ SL_ATR_MULT = 0.20  # 0.05 was too tight for tick data at 9:15 — triggered on 
 TRAIL_ATR_MULT = 0.005
 MIN_TRAIL_PCT = 0.10  # floor: never trail tighter than 0.1% (prevents sub-tick noise exits)
 FLIP_BUFFER_ATR = 0.05  # buffer beyond SL before flip entry (ATR × 0.05)
+FLIP_SL_ATR_MULT = 0.50  # wider SL for flips — 74% WR vs 59% at 0.20
 LEVERAGE = 5
 
 # ═══ SESSION TOGGLES (enable/disable via env or here) ═══
@@ -1105,9 +1106,9 @@ class BasketTrader:
                     to_remove.append(sym)
                 continue
 
-            # Triggered — enter flip immediately
+            # Triggered — enter flip immediately (wider SL to survive opening chop)
             atr_p = fc['atr_pct']
-            sl_abs = atr_p * SL_ATR_MULT / 100 * price
+            sl_abs = atr_p * FLIP_SL_ATR_MULT / 100 * price
             trail_pct = max(atr_p * TRAIL_ATR_MULT, MIN_TRAIL_PCT)
             sl_price = (price + sl_abs) if flip_dir == 'SELL' else (price - sl_abs)
             capital = fc['capital']
