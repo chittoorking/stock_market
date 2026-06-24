@@ -364,18 +364,31 @@ class BigBarTrader:
                 now_ms = int(time.time() * 1000)
                 bar_start = now_ms - 360000  # last 6 min
 
-                for sym in all_stocks:
+                # Parallel fetch candles for all stocks using threads
+                import threading as _th
+                bar_data = {}  # sym -> bar dict
+
+                def fetch_bar(sym):
                     try:
                         candles = api.get_historical_candles(sym, "5minute", bar_start, now_ms)
-                        if not candles or len(candles) < 2:
-                            continue
-                        # Use SECOND-TO-LAST candle (the just-closed bar)
-                        bar = candles[-2]
-                        bar = {'o': bar['o'], 'h': bar['h'], 'l': bar['l'], 'c': bar['c']}
+                        if candles and len(candles) >= 2:
+                            b = candles[-2]  # second-to-last = just-closed bar
+                            bar_data[sym] = {'o': b['o'], 'h': b['h'], 'l': b['l'], 'c': b['c']}
                     except Exception:
-                        continue
+                        pass
 
-                    # Process signal
+                # Fire all 90 in parallel (10 batches of 9 threads)
+                for batch_start in range(0, len(all_stocks), 10):
+                    batch = all_stocks[batch_start:batch_start+10]
+                    threads = [_th.Thread(target=fetch_bar, args=(s,)) for s in batch]
+                    for t in threads: t.start()
+                    for t in threads: t.join(timeout=5)
+                    time.sleep(0.1)  # small gap between batches
+
+                log.info(f'  Fetched {len(bar_data)} bars in {time.time()-now_t:.1f}s')
+
+                # Process signals
+                for sym, bar in bar_data.items():
                     signal = self.on_bar_close(sym, bar)
                     if not signal:
                         continue
@@ -389,8 +402,6 @@ class BigBarTrader:
 
                     elif signal['action'] == 'EXIT':
                         self.exit_position(sym, signal['price'], signal['reason'])
-
-                    time.sleep(0.05)
 
                 # Status
                 if self.positions:
