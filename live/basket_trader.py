@@ -988,7 +988,8 @@ class BasketTrader:
                         last_price_time = time.time()
 
                 # Safety: if no price for 5 min, force close everything
-                if time.time() - last_price_time > MAX_NO_PRICE_SECS:
+                # But don't trigger if we're just waiting for flip candidates (no positions)
+                if self.positions and time.time() - last_price_time > MAX_NO_PRICE_SECS:
                     log.error('NO PRICE UPDATES for 5 minutes — force closing all positions')
                     self.close_all()
                     break
