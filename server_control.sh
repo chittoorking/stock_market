@@ -62,18 +62,46 @@ case "$1" in
     ssh -i "$SSH_KEY" "$VM_USER@$VM_IP" "cat ~/trading-bot/journal/$DATE.json 2>/dev/null || echo 'No journal for today'"
     ;;
 
+  token)
+    if [ -z "$2" ]; then
+      echo ""
+      echo "Step 1: Open this URL in browser/phone:"
+      echo ""
+      echo "  https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=a44bd36b-ca11-444a-bc27-87ba47b3295a&redirect_uri=https://127.0.0.1:443/callback"
+      echo ""
+      echo "Step 2: Login to Upstox"
+      echo "Step 3: Browser shows error — copy the CODE from URL bar"
+      echo "        URL looks like: https://127.0.0.1/callback?code=XXXXXX"
+      echo ""
+      echo "Step 4: Run: ./server_control.sh token XXXXXX"
+      echo ""
+    else
+      echo "Exchanging code for token..."
+      ssh -i "$SSH_KEY" "$VM_USER@$VM_IP" \
+        "cd ~/trading-bot && ./venv/bin/python auto_token.py $2"
+    fi
+    ;;
+
+  check-token)
+    ssh -i "$SSH_KEY" "$VM_USER@$VM_IP" \
+      "cd ~/trading-bot && ./venv/bin/python auto_token.py"
+    ;;
+
   *)
     echo "CAM BOT v3 — Server Control"
     echo ""
-    echo "Usage: $0 {on|off|start|stop|status|ssh|log|today}"
+    echo "Usage: $0 {on|off|start|stop|status|token|check-token|ssh|log|today}"
     echo ""
-    echo "  on     — Enable bot (auto-runs at 10:10 AM weekdays)"
-    echo "  off    — Disable bot (won't trade until you turn ON)"
-    echo "  start  — Start bot NOW (manual run)"
-    echo "  stop   — Kill running bot (keeps enabled for tomorrow)"
-    echo "  status — Check if enabled + running"
-    echo "  ssh    — Login to server"
-    echo "  log    — View last 50 lines of bot log"
-    echo "  today  — View today's trade journal"
+    echo "  on          — Enable bot (auto-runs at 9:15 AM weekdays)"
+    echo "  off         — Disable bot (won't trade until you turn ON)"
+    echo "  start       — Start bot NOW (manual run)"
+    echo "  stop        — Kill running bot"
+    echo "  status      — Check if enabled + running"
+    echo "  token       — Get daily Upstox token (run every morning)"
+    echo "  token CODE  — Save token using auth code"
+    echo "  check-token — Verify if current token works"
+    echo "  ssh         — Login to server"
+    echo "  log         — View last 50 lines of bot log"
+    echo "  today       — View today's trade journal"
     ;;
 esac

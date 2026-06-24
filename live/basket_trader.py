@@ -1684,7 +1684,7 @@ class BasketTrader:
             pairs_thread.join(timeout=60)
         if bigbar_thread and bigbar_thread.is_alive():
             log.info('Waiting for big bar session to finish...')
-            bigbar_thread.join(timeout=60)
+            bigbar_thread.join(timeout=18000)  # wait up to 5 hours for bigbar (runs until 14:30)
             # Add bigbar P&L to daily total
             if ENABLE_BIGBAR:
                 self.daily_pnl += bb_trader.daily_pnl
