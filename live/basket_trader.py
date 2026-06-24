@@ -1000,17 +1000,20 @@ class BasketTrader:
                 if int(time.time()) % 10 == 0 and self.positions:
                     self._print_live_pnl()
 
-                # [FEATURE 7] Flip monitor — check at each 5-min bar boundary
+                # [FEATURE 7] Flip monitor — only until 9:20 (gaps fill in first 5 min)
                 now = datetime.now()
                 if now.second < 2 and now.minute % 5 == 0 and self.flip_candidates:
-                    self._check_flip_entries()
+                    if now.hour == 9 and now.minute <= 20:
+                        self._check_flip_entries()
+                    elif now.hour == 9 and now.minute > 20:
+                        log.info('Past 9:20 — clearing flip candidates')
+                        self.flip_candidates.clear()
 
-                # Exit loop if nothing to do (no positions, no flip candidates)
+                # Exit loop if nothing to do
                 if not self.positions and not self.flip_candidates:
-                    # Wait 1 more minute in case flips are still being registered
-                    time.sleep(60)
-                    if not self.positions and not self.flip_candidates:
-                        log.info('No positions and no flip candidates — exiting monitor')
+                    now_check = datetime.now()
+                    if now_check.hour >= 10 or (now_check.hour == 9 and now_check.minute > 25):
+                        log.info('No positions, no flips, past 9:25 — exiting monitor')
                         break
 
                 # Force close at 3:15 PM — don't hold past market close
