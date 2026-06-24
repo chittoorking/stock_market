@@ -365,33 +365,32 @@ class BigBarTrader:
                 bar_start = now_ms - 360000  # last 6 min
 
                 for sym in all_stocks:
-                        try:
-                            candles = api.get_historical_candles(sym, "5minute", bar_start, now_ms)
-                            if not candles or len(candles) < 2:
-                                continue
-                            # Use SECOND-TO-LAST candle (the just-closed bar)
-                            # Last candle is still forming
-                            bar = candles[-2]
-                            bar = {'o': bar['o'], 'h': bar['h'], 'l': bar['l'], 'c': bar['c']}
-                        except Exception:
+                    try:
+                        candles = api.get_historical_candles(sym, "5minute", bar_start, now_ms)
+                        if not candles or len(candles) < 2:
                             continue
+                        # Use SECOND-TO-LAST candle (the just-closed bar)
+                        bar = candles[-2]
+                        bar = {'o': bar['o'], 'h': bar['h'], 'l': bar['l'], 'c': bar['c']}
+                    except Exception:
+                        continue
 
-                        # Process signal
-                        signal = self.on_bar_close(sym, bar)
-                        if not signal:
-                            continue
+                    # Process signal
+                    signal = self.on_bar_close(sym, bar)
+                    if not signal:
+                        continue
 
-                        if signal['action'] == 'ENTER':
-                            qty = int(self.capital / 5 / signal['price'])
-                            if qty > 0:
-                                self.enter_position(sym, signal['direction'],
-                                                    signal['price'], qty,
-                                                    trigger_price=signal.get('trigger_price'))
+                    if signal['action'] == 'ENTER':
+                        qty = int(self.capital / 5 / signal['price'])
+                        if qty > 0:
+                            self.enter_position(sym, signal['direction'],
+                                                signal['price'], qty,
+                                                trigger_price=signal.get('trigger_price'))
 
-                        elif signal['action'] == 'EXIT':
-                            self.exit_position(sym, signal['price'], signal['reason'])
+                    elif signal['action'] == 'EXIT':
+                        self.exit_position(sym, signal['price'], signal['reason'])
 
-                    time.sleep(0.05)  # small delay between stocks
+                    time.sleep(0.05)
 
                 # Status
                 if self.positions:
