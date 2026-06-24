@@ -100,6 +100,9 @@ WS_ORDERS = 'wss://ws-order-updates.indstocks.com/api/v1/ws/trades'
 # ═══ PERSISTENCE ═══
 DATA_DIR = Path(__file__).parent.parent / 'data'
 FILL_HISTORY_FILE = DATA_DIR / 'fill_history.json'
+GAP_HISTORY_FILE = DATA_DIR / 'gap_history.json'
+MAX_RELATIVE_GAP = 3.0   # skip gaps > 3x the stock's recent average
+GAP_HISTORY_N = 10        # lookback for relative gap calculation
 
 
 class PriceFeed:
@@ -329,6 +332,7 @@ class BasketTrader:
         self.prev_close = {}
         self.daily_history = {}
         self.fill_history = {}
+        self.gap_history = {}       # sym → [gap1, gap2, ...] last N gap sizes
         self.circuit_limits = {}    # sym → {upper, lower}
         self.available_margin = 0
 
@@ -337,6 +341,7 @@ class BasketTrader:
         self.order_feed = OrderFeed()
 
         self._load_fill_history()
+        self._load_gap_history()
 
     # ═══════════════════════════════════════════════════════════
     # PERSISTENCE
@@ -353,6 +358,33 @@ class BasketTrader:
     def _save_fill_history(self):
         FILL_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
         FILL_HISTORY_FILE.write_text(json.dumps(self.fill_history, indent=2))
+
+    def _load_gap_history(self):
+        if GAP_HISTORY_FILE.exists():
+            try:
+                self.gap_history = json.loads(GAP_HISTORY_FILE.read_text())
+                log.info(f'Loaded gap history: {len(self.gap_history)} stocks')
+            except Exception:
+                self.gap_history = {}
+
+    def _save_gap_history(self):
+        GAP_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        GAP_HISTORY_FILE.write_text(json.dumps(self.gap_history, indent=2))
+
+    def relative_gap(self, sym, gap_abs):
+        """Return gap / avg(last N gaps). < 1 = smaller than usual, > 3 = extreme."""
+        hist = self.gap_history.get(sym, [])
+        if len(hist) < 3:
+            return 1.0  # not enough data, assume normal
+        avg = sum(hist[-GAP_HISTORY_N:]) / len(hist[-GAP_HISTORY_N:])
+        return gap_abs / avg if avg > 0 else 1.0
+
+    def _record_gap(self, sym, gap_abs):
+        """Record today's gap for relative gap calculation."""
+        if sym not in self.gap_history:
+            self.gap_history[sym] = []
+        self.gap_history[sym].append(round(gap_abs, 4))
+        self.gap_history[sym] = self.gap_history[sym][-GAP_HISTORY_N:]
 
     def _update_all_fill_history(self):
         """At EOD, check ALL gap stocks (not just traded ones).
@@ -696,13 +728,25 @@ class BasketTrader:
                 continue
 
             gap = (gap_price - prev) / prev * 100
+            gap_abs = abs(gap)
+
+            # Record ALL gaps >= 0.5% for relative gap tracking
+            if gap_abs >= MIN_GAP:
+                self._record_gap(sym, gap_abs)
+
             log.info(f'  {sym}: prev={prev:.2f} open={open_price:.2f} gap={gap:+.2f}%')
-            if abs(gap) < MIN_GAP:
+            if gap_abs < MIN_GAP:
                 continue
 
             # [FEATURE 5] Skip stocks near circuit limits
             if self.is_near_circuit(sym, price):
                 log.info(f'{sym}: NEAR CIRCUIT at Rs {price:.2f}, skipping')
+                continue
+
+            # Relative gap filter — skip abnormally large gaps (news-driven, won't fill)
+            rel_gap = self.relative_gap(sym, gap_abs)
+            if rel_gap > MAX_RELATIVE_GAP:
+                log.info(f'{sym}: relative gap {rel_gap:.1f}x > {MAX_RELATIVE_GAP}x — skipping')
                 continue
 
             wr = self.rolling_wr(sym)
@@ -734,6 +778,7 @@ class BasketTrader:
                 'sym': sym, 'gap': gap, 'price': price, 'prev_close': prev,
                 'direction': direction, 'score': score,
                 'wr': wr, 'ev': ev, 'gap_vs_atr': gap_vs_atr,
+                'rel_gap': rel_gap,
                 'sector': SECTORS.get(sym, '?'),
                 'sl_pct': sl_pct, 'trail_pct': trail_pct,
                 'atr_pct': ind['atr_pct'], 'depth_score': depth_score,
@@ -764,7 +809,7 @@ class BasketTrader:
             log.info(f'  #{i+1}: {c["sym"]:<12s} gap={c["gap"]:+.1f}% '
                      f'dir={c["direction"]} EV={c["ev"]:.3f} score={c["score"]:.3f} '
                      f'WR={c["wr"]:.0%} g/ATR={c["gap_vs_atr"]:.2f} '
-                     f'depth={c["depth_score"]:.2f}')
+                     f'rel={c["rel_gap"]:.1f}x depth={c["depth_score"]:.2f}')
         return selected
 
     # ═══════════════════════════════════════════════════════════
@@ -1622,6 +1667,7 @@ class BasketTrader:
                 bigbar_thread.join(timeout=18000)
             self.price_feed.stop()
             self._save_fill_history()
+            self._save_gap_history()
             self._update_all_fill_history()
             self.write_journal()
             return
@@ -1686,6 +1732,7 @@ class BasketTrader:
         self.price_feed.stop()
         self.order_feed.stop()
         self._save_fill_history()
+        self._save_gap_history()
         self.write_journal()
 
         wins = sum(1 for t in self.daily_trades if t['pnl_pct'] > 0)
