@@ -355,23 +355,27 @@ class BigBarTrader:
                 self.bar_count += 1
                 log.info(f'--- Bar {self.bar_count} close ---')
 
-                # Get current prices and build bars
+                # Get current prices and build bars using full quote (1 batch call, not 90 individual)
+                quotes = api.get_full_quote(all_stocks)
                 for sym in all_stocks:
-                    ltp = self.price_feed.get_ltp(sym)
-                    if ltp <= 0:
+                    q = quotes.get(sym, {})
+                    cur = q.get('last_price', 0)
+                    op = q.get('open', 0)
+                    hi = q.get('high', 0)
+                    lo = q.get('low', 0)
+                    if cur <= 0 or op <= 0:
                         continue
 
-                    # Fetch last 5-min bar from API
-                    try:
-                        now_ms = int(time.time() * 1000)
-                        candles = api.get_historical_candles(sym, "5minute",
-                                                             now_ms - 600000, now_ms)
-                        if not candles:
-                            continue
-                        bar = {'o': candles[-1]['o'], 'h': candles[-1]['h'],
-                               'l': candles[-1]['l'], 'c': candles[-1]['c']}
-                    except Exception:
-                        continue
+                    # Build a synthetic bar from quote data
+                    # This represents the CURRENT state — price action since open
+                    # For bar-by-bar detection, use the LTP change over last 5 min
+                    prev_price = self.price_feed.get_ltp(sym)
+                    if prev_price <= 0:
+                        prev_price = cur
+
+                    # Store current price for next bar's comparison
+                    last_close = self.prev_bars.get(sym, {}).get('closes', [0])[-1] if sym in self.prev_bars else cur
+                    bar = {'o': last_close, 'h': max(last_close, cur), 'l': min(last_close, cur), 'c': cur}
 
                     # Process signal
                     signal = self.on_bar_close(sym, bar)
