@@ -355,42 +355,43 @@ class BigBarTrader:
                 self.bar_count += 1
                 log.info(f'--- Bar {self.bar_count} close ---')
 
-                # Get current prices and build bars using full quote (1 batch call, not 90 individual)
-                quotes = api.get_full_quote(all_stocks)
+                # Skip first 2 bars — history needs to build up
+                if self.bar_count <= 2:
+                    log.info(f'  Skipping bar {self.bar_count} (warming up)')
+                    continue
+
+                # Fetch actual 5-min candles for each stock
+                now_ms = int(time.time() * 1000)
+                bar_start = now_ms - 360000  # last 6 min
+
                 for sym in all_stocks:
-                    q = quotes.get(sym, {})
-                    cur = q.get('last_price', 0)
-                    op = q.get('open', 0)
-                    hi = q.get('high', 0)
-                    lo = q.get('low', 0)
-                    if cur <= 0 or op <= 0:
-                        continue
+                        try:
+                            candles = api.get_historical_candles(sym, "5minute", bar_start, now_ms)
+                            if not candles or len(candles) < 2:
+                                continue
+                            # Use SECOND-TO-LAST candle (the just-closed bar)
+                            # Last candle is still forming
+                            bar = candles[-2]
+                            bar = {'o': bar['o'], 'h': bar['h'], 'l': bar['l'], 'c': bar['c']}
+                        except Exception:
+                            continue
 
-                    # Build a synthetic bar from quote data
-                    # This represents the CURRENT state — price action since open
-                    # For bar-by-bar detection, use the LTP change over last 5 min
-                    prev_price = self.price_feed.get_ltp(sym)
-                    if prev_price <= 0:
-                        prev_price = cur
+                        # Process signal
+                        signal = self.on_bar_close(sym, bar)
+                        if not signal:
+                            continue
 
-                    # Store current price for next bar's comparison
-                    last_close = self.prev_bars.get(sym, {}).get('closes', [0])[-1] if sym in self.prev_bars else cur
-                    bar = {'o': last_close, 'h': max(last_close, cur), 'l': min(last_close, cur), 'c': cur}
+                        if signal['action'] == 'ENTER':
+                            qty = int(self.capital / 5 / signal['price'])
+                            if qty > 0:
+                                self.enter_position(sym, signal['direction'],
+                                                    signal['price'], qty,
+                                                    trigger_price=signal.get('trigger_price'))
 
-                    # Process signal
-                    signal = self.on_bar_close(sym, bar)
-                    if not signal:
-                        continue
+                        elif signal['action'] == 'EXIT':
+                            self.exit_position(sym, signal['price'], signal['reason'])
 
-                    if signal['action'] == 'ENTER':
-                        qty = int(self.capital / 5 / signal['price'])
-                        if qty > 0:
-                            self.enter_position(sym, signal['direction'],
-                                                signal['price'], qty,
-                                                trigger_price=signal.get('trigger_price'))
-
-                    elif signal['action'] == 'EXIT':
-                        self.exit_position(sym, signal['price'], signal['reason'])
+                    time.sleep(0.05)  # small delay between stocks
 
                 # Status
                 if self.positions:
