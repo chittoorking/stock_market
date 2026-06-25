@@ -338,19 +338,23 @@ class BigBarTrader:
         log.info(f'Loaded history for {loaded} stocks')
 
         # Main loop — check every 5 min (on bar close)
-        BAR_INTERVAL = 300  # 5 min
-        last_bar = time.time()
+        # Snap to actual market bar boundaries: 9:20, 9:25, ..., 14:30
+        # Market 5-min bars close when minute % 5 == 0 (e.g. 9:20, 9:25, ...)
+        last_bar = 0  # epoch 0 → fires on first boundary we see
         last_status = 0
 
         while datetime.now() < end_time:
             now_t = time.time()
+            now_dt = datetime.now()
 
             # Emergency SL check every 2 seconds
             if self.positions:
                 self.check_emergency_sl()
 
-            # Bar close check every 5 min
-            if now_t - last_bar >= BAR_INTERVAL:
+            # Bar close check: fire within first 8s of each 5-min market boundary
+            # (minute % 5 == 0 catches 9:20, 9:25, 10:00, 10:05, ... 14:30)
+            at_boundary = (now_dt.minute % 5 == 0 and now_dt.second < 8)
+            if at_boundary and now_t - last_bar >= 60:  # 60s guard prevents double-fire
                 last_bar = now_t
                 self.bar_count += 1
                 log.info(f'--- Bar {self.bar_count} close ---')
