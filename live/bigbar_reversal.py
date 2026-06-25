@@ -145,6 +145,7 @@ class BigBarTrader:
 
         # Filter 1: body size
         if body_pct < MIN_BODY_PCT:
+            log.debug(f'  {sym}: body={body_pct:.2f}% < {MIN_BODY_PCT}% — skip')
             return None
 
         # Filter 2: isolated (prev bar opposite direction — use actual bar body)
@@ -152,6 +153,7 @@ class BigBarTrader:
             prev_bar = prev_bars_list[-2]
             prev_body = prev_bar['c'] - prev_bar['o']
             if prev_body * body > 0:  # same direction = trend, skip
+                log.debug(f'  {sym}: body={body_pct:.2f}% but not isolated (prev same dir) — skip')
                 return None
 
         # Filter 3: ALMA confirms overextension
@@ -160,12 +162,15 @@ class BigBarTrader:
         if body < 0:  # big red bar → want to BUY
             # ALMA should be below BB mid (confirming downside overextension)
             if alma_v[-1] >= bb_m[-1]:
+                log.debug(f'  {sym}: BIG RED body={body_pct:.2f}% but ALMA {alma_v[-1]:.2f} >= BBmid {bb_m[-1]:.2f} — skip')
                 return None
             direction = 'BUY'
         else:  # big green bar → want to SELL
             if alma_v[-1] <= bb_m[-1]:
+                log.debug(f'  {sym}: BIG GREEN body={body_pct:.2f}% but ALMA {alma_v[-1]:.2f} <= BBmid {bb_m[-1]:.2f} — skip')
                 return None
             direction = 'SELL'
+        log.info(f'  {sym}: SIGNAL {direction} body={body_pct:.2f}% ALMA={alma_v[-1]:.2f} BBmid={bb_m[-1]:.2f}')
 
         # Calculate GTT trigger price (5% of bar range above/below close)
         rng = bar['h'] - bar['l']
@@ -390,6 +395,15 @@ class BigBarTrader:
                     time.sleep(0.1)  # small gap between batches
 
                 log.info(f'  Fetched {len(bar_data)} bars in {time.time()-now_t:.1f}s')
+
+                # Body size summary — helps diagnose why no signals fire
+                bodies = sorted(
+                    [abs(b['c'] - b['o']) / b['c'] * 100 for b in bar_data.values() if b['c'] > 0],
+                    reverse=True
+                )
+                big_body_count = sum(1 for x in bodies if x >= MIN_BODY_PCT)
+                top5 = ', '.join(f'{x:.2f}%' for x in bodies[:5])
+                log.info(f'  Body sizes — >{MIN_BODY_PCT}%: {big_body_count}/{len(bodies)} stocks. Top5: [{top5}]')
 
                 # Process signals
                 for sym, bar in bar_data.items():
