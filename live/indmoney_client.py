@@ -265,7 +265,8 @@ def get_historical_candles(sym, interval, start_ts, end_ts):
             f'{BASE}/market/historical/{interval}?scrip-codes={scrip}&start_time={start_ts}&end_time={end_ts}',
             headers=headers(), timeout=15)
         if r.status_code == 200:
-            return r.json().get('data', {}).get(scrip, {}).get('candles', [])
+            candles = r.json().get('data', {}).get(scrip, {}).get('candles', [])
+            return candles or []  # API sometimes returns None instead of []
     except Exception as e:
         log.error(f'Historical data error: {e}')
     return []
