@@ -11,59 +11,45 @@ log = logging.getLogger('indmoney')
 BASE = 'https://api.indstocks.com'
 TOKEN_FILE = Path(__file__).parent.parent / 'data' / 'indmoney_token.txt'
 
-# Scrip code mapping: NIFTY 100 stocks
+# Scrip code mapping: NIFTY 500 stocks
 # Format: NSE_{security_id} from INDstocks /market/instruments?source=equity
-# All 90 verified against instrument master on 2026-06-27
-SCRIP_CODES = {
-    # --- NIFTY 50 ---
-    'ADANIENT': 'NSE_25', 'ADANIPORTS': 'NSE_15083',
-    'APOLLOHOSP': 'NSE_157', 'ASIANPAINT': 'NSE_236',
-    'AXISBANK': 'NSE_5900', 'BAJAJ-AUTO': 'NSE_16669',
-    'BAJFINANCE': 'NSE_317', 'BAJAJFINSV': 'NSE_16675',
-    'BPCL': 'NSE_526', 'BHARTIARTL': 'NSE_10604',
-    'BRITANNIA': 'NSE_547', 'CIPLA': 'NSE_694',
-    'COALINDIA': 'NSE_20374', 'DIVISLAB': 'NSE_10940',
-    'DRREDDY': 'NSE_881', 'EICHERMOT': 'NSE_910',
-    'GRASIM': 'NSE_1232', 'HCLTECH': 'NSE_7229',
-    'HDFCBANK': 'NSE_1333', 'HDFCLIFE': 'NSE_467',
-    'HEROMOTOCO': 'NSE_1348', 'HINDALCO': 'NSE_1363',
-    'HINDUNILVR': 'NSE_1394', 'ICICIBANK': 'NSE_4963',
-    'ITC': 'NSE_1660', 'INDUSINDBK': 'NSE_5258',
-    'INFY': 'NSE_1594', 'JSWSTEEL': 'NSE_11723',
-    'KOTAKBANK': 'NSE_1922', 'LT': 'NSE_11483',
-    'M&M': 'NSE_2031', 'MARUTI': 'NSE_10999',
-    'NTPC': 'NSE_11630', 'NESTLEIND': 'NSE_17963',
-    'ONGC': 'NSE_2475', 'POWERGRID': 'NSE_14977',
-    'RELIANCE': 'NSE_2885', 'SBILIFE': 'NSE_21808',
-    'SBIN': 'NSE_3045', 'SHRIRAMFIN': 'NSE_4306',
-    'SUNPHARMA': 'NSE_3351', 'TCS': 'NSE_11536',
-    'TATACONSUM': 'NSE_3432', 'TATAMOTORS': 'NSE_3456',
-    'TATASTEEL': 'NSE_3499', 'TECHM': 'NSE_13538',
-    'TITAN': 'NSE_3506',
-    'UPL': 'NSE_11287', 'ULTRACEMCO': 'NSE_11532',
-    'WIPRO': 'NSE_3787',
-    # --- NIFTY Next 50 ---
-    'ABB': 'NSE_13', 'ADANIENSOL': 'NSE_10217',
-    'ADANIGREEN': 'NSE_3563', 'ADANIPOWER': 'NSE_17388',
-    'AMBUJACEM': 'NSE_1270', 'BAJAJHLDNG': 'NSE_305',
-    'BANKBARODA': 'NSE_4668', 'BOSCHLTD': 'NSE_2181',
-    'CANBK': 'NSE_10794', 'CGPOWER': 'NSE_760',
-    'CHOLAFIN': 'NSE_685', 'CUMMINSIND': 'NSE_1901',
-    'DLF': 'NSE_14732', 'DMART': 'NSE_19913',
-    'GAIL': 'NSE_4717', 'GODREJCP': 'NSE_10099',
-    'HAL': 'NSE_2303', 'HDFCAMC': 'NSE_4244',
-    'HINDZINC': 'NSE_1424', 'INDHOTEL': 'NSE_1512',
-    'IOC': 'NSE_1624', 'IRFC': 'NSE_2029',
-    'JINDALSTEL': 'NSE_6733', 'LODHA': 'NSE_3220',
-    'LTM': 'NSE_17818', 'MOTHERSON': 'NSE_4204',
-    'MUTHOOTFIN': 'NSE_23650', 'PFC': 'NSE_14299',
-    'PIDILITIND': 'NSE_2664', 'PNB': 'NSE_10666',
-    'RECLTD': 'NSE_15355', 'SHREECEM': 'NSE_3103',
-    'SIEMENS': 'NSE_3150', 'SOLARINDS': 'NSE_13332',
-    'TATAPOWER': 'NSE_3426', 'TORNTPHARM': 'NSE_3518',
-    'TVSMOTOR': 'NSE_8479', 'UNIONBANK': 'NSE_10753',
-    'UNITDSPR': 'NSE_10447', 'VBL': 'NSE_18921',
-}
+# All 500 verified against instrument master on 2026-06-27
+# Load from data/nifty500_scrips.json if available, else use hardcoded fallback
+import json as _json
+
+_SCRIP_FILE = Path(__file__).parent.parent / 'data' / 'nifty500_scrips.json'
+if _SCRIP_FILE.exists():
+    SCRIP_CODES = _json.loads(_SCRIP_FILE.read_text())
+else:
+    # Fallback: NIFTY 50 core (always works)
+    SCRIP_CODES = {
+        'ADANIENT': 'NSE_25', 'ADANIPORTS': 'NSE_15083',
+        'APOLLOHOSP': 'NSE_157', 'ASIANPAINT': 'NSE_236',
+        'AXISBANK': 'NSE_5900', 'BAJAJ-AUTO': 'NSE_16669',
+        'BAJFINANCE': 'NSE_317', 'BAJAJFINSV': 'NSE_16675',
+        'BPCL': 'NSE_526', 'BHARTIARTL': 'NSE_10604',
+        'BRITANNIA': 'NSE_547', 'CIPLA': 'NSE_694',
+        'COALINDIA': 'NSE_20374', 'DIVISLAB': 'NSE_10940',
+        'DRREDDY': 'NSE_881', 'EICHERMOT': 'NSE_910',
+        'GRASIM': 'NSE_1232', 'HCLTECH': 'NSE_7229',
+        'HDFCBANK': 'NSE_1333', 'HDFCLIFE': 'NSE_467',
+        'HEROMOTOCO': 'NSE_1348', 'HINDALCO': 'NSE_1363',
+        'HINDUNILVR': 'NSE_1394', 'ICICIBANK': 'NSE_4963',
+        'ITC': 'NSE_1660', 'INDUSINDBK': 'NSE_5258',
+        'INFY': 'NSE_1594', 'JSWSTEEL': 'NSE_11723',
+        'KOTAKBANK': 'NSE_1922', 'LT': 'NSE_11483',
+        'M&M': 'NSE_2031', 'MARUTI': 'NSE_10999',
+        'NTPC': 'NSE_11630', 'NESTLEIND': 'NSE_17963',
+        'ONGC': 'NSE_2475', 'POWERGRID': 'NSE_14977',
+        'RELIANCE': 'NSE_2885', 'SBILIFE': 'NSE_21808',
+        'SBIN': 'NSE_3045', 'SHRIRAMFIN': 'NSE_4306',
+        'SUNPHARMA': 'NSE_3351', 'TCS': 'NSE_11536',
+        'TATACONSUM': 'NSE_3432', 'TATAMOTORS': 'NSE_3456',
+        'TATASTEEL': 'NSE_3499', 'TECHM': 'NSE_13538',
+        'TITAN': 'NSE_3506',
+        'UPL': 'NSE_11287', 'ULTRACEMCO': 'NSE_11532',
+        'WIPRO': 'NSE_3787',
+    }
 
 # Reverse maps
 SYM_FROM_SCRIP = {v: k for k, v in SCRIP_CODES.items()}
