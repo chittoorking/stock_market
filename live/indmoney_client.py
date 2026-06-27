@@ -11,15 +11,13 @@ log = logging.getLogger('indmoney')
 BASE = 'https://api.indstocks.com'
 TOKEN_FILE = Path(__file__).parent.parent / 'data' / 'indmoney_token.txt'
 
-# Scrip code mapping: NIFTY 100 stocks (90 verified + estimated)
-# Format: NSE_{security_id} — matches NSE official security IDs
-# VERIFIED (50): NIFTY 50 codes confirmed via live LTP on 2026-06-16
-# ESTIMATED (40): NIFTY Next 50 codes from NSE bhavcopy — run verify_scrips.py to confirm
-# TRENT: not available on INDstocks (NSE_3584 returns empty)
+# Scrip code mapping: NIFTY 100 stocks
+# Format: NSE_{security_id} from INDstocks /market/instruments?source=equity
+# All 90 verified against instrument master on 2026-06-27
 SCRIP_CODES = {
-    # --- NIFTY 50 (verified) ---
+    # --- NIFTY 50 ---
     'ADANIENT': 'NSE_25', 'ADANIPORTS': 'NSE_15083',
-    'APOLLOHOSP': 'NSE_18365', 'ASIANPAINT': 'NSE_236',
+    'APOLLOHOSP': 'NSE_157', 'ASIANPAINT': 'NSE_236',
     'AXISBANK': 'NSE_5900', 'BAJAJ-AUTO': 'NSE_16669',
     'BAJFINANCE': 'NSE_317', 'BAJAJFINSV': 'NSE_16675',
     'BPCL': 'NSE_526', 'BHARTIARTL': 'NSE_10604',
@@ -37,34 +35,34 @@ SCRIP_CODES = {
     'NTPC': 'NSE_11630', 'NESTLEIND': 'NSE_17963',
     'ONGC': 'NSE_2475', 'POWERGRID': 'NSE_14977',
     'RELIANCE': 'NSE_2885', 'SBILIFE': 'NSE_21808',
-    'SBIN': 'NSE_3045', 'SHRIRAMFIN': 'NSE_3103',
+    'SBIN': 'NSE_3045', 'SHRIRAMFIN': 'NSE_4306',
     'SUNPHARMA': 'NSE_3351', 'TCS': 'NSE_11536',
     'TATACONSUM': 'NSE_3432', 'TATAMOTORS': 'NSE_3456',
     'TATASTEEL': 'NSE_3499', 'TECHM': 'NSE_13538',
     'TITAN': 'NSE_3506',
     'UPL': 'NSE_11287', 'ULTRACEMCO': 'NSE_11532',
     'WIPRO': 'NSE_3787',
-    # --- NIFTY Next 50 (estimated — verify with verify_scrips.py) ---
-    'ABB': 'NSE_20070', 'ADANIENSOL': 'NSE_25850',
-    'ADANIGREEN': 'NSE_21871', 'ADANIPOWER': 'NSE_18388',
-    'AMBUJACEM': 'NSE_1270', 'BAJAJHLDNG': 'NSE_1102',
-    'BANKBARODA': 'NSE_1452', 'BOSCHLTD': 'NSE_1080',
-    'CANBK': 'NSE_10180', 'CGPOWER': 'NSE_14875',
-    'CHOLAFIN': 'NSE_2972', 'CUMMINSIND': 'NSE_1700',
-    'DLF': 'NSE_14366', 'DMART': 'NSE_20640',
+    # --- NIFTY Next 50 ---
+    'ABB': 'NSE_13', 'ADANIENSOL': 'NSE_10217',
+    'ADANIGREEN': 'NSE_3563', 'ADANIPOWER': 'NSE_17388',
+    'AMBUJACEM': 'NSE_1270', 'BAJAJHLDNG': 'NSE_305',
+    'BANKBARODA': 'NSE_4668', 'BOSCHLTD': 'NSE_2181',
+    'CANBK': 'NSE_10794', 'CGPOWER': 'NSE_760',
+    'CHOLAFIN': 'NSE_685', 'CUMMINSIND': 'NSE_1901',
+    'DLF': 'NSE_14732', 'DMART': 'NSE_19913',
     'GAIL': 'NSE_4717', 'GODREJCP': 'NSE_10099',
-    'HAL': 'NSE_14307', 'HDFCAMC': 'NSE_22122',
-    'HINDZINC': 'NSE_1279', 'INDHOTEL': 'NSE_1550',
-    'IOC': 'NSE_1624', 'IRFC': 'NSE_24143',
-    'JINDALSTEL': 'NSE_11243', 'LODHA': 'NSE_24954',
-    'LTM': 'NSE_17818', 'MOTHERSON': 'NSE_3405',
-    'MUTHOOTFIN': 'NSE_17622', 'PFC': 'NSE_14299',
-    'PIDILITIND': 'NSE_2664', 'PNB': 'NSE_2730',
-    'RECLTD': 'NSE_14383', 'SHREECEM': 'NSE_3410',
-    'SIEMENS': 'NSE_3150', 'SOLARINDS': 'NSE_16213',
-    'TATAPOWER': 'NSE_3426', 'TORNTPHARM': 'NSE_3839',
-    'TVSMOTOR': 'NSE_3937', 'UNIONBANK': 'NSE_10355',
-    'UNITDSPR': 'NSE_7269', 'VBL': 'NSE_16713',
+    'HAL': 'NSE_2303', 'HDFCAMC': 'NSE_4244',
+    'HINDZINC': 'NSE_1424', 'INDHOTEL': 'NSE_1512',
+    'IOC': 'NSE_1624', 'IRFC': 'NSE_2029',
+    'JINDALSTEL': 'NSE_6733', 'LODHA': 'NSE_3220',
+    'LTM': 'NSE_17818', 'MOTHERSON': 'NSE_4204',
+    'MUTHOOTFIN': 'NSE_23650', 'PFC': 'NSE_14299',
+    'PIDILITIND': 'NSE_2664', 'PNB': 'NSE_10666',
+    'RECLTD': 'NSE_15355', 'SHREECEM': 'NSE_3103',
+    'SIEMENS': 'NSE_3150', 'SOLARINDS': 'NSE_13332',
+    'TATAPOWER': 'NSE_3426', 'TORNTPHARM': 'NSE_3518',
+    'TVSMOTOR': 'NSE_8479', 'UNIONBANK': 'NSE_10753',
+    'UNITDSPR': 'NSE_10447', 'VBL': 'NSE_18921',
 }
 
 # Reverse maps
