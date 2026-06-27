@@ -73,10 +73,10 @@ SECTORS = {
 ALL_STOCKS = list(api.SCRIP_CODES.keys())
 
 # ═══ STRATEGY PARAMS ═══
-MIN_GAP = 0.5
+MIN_GAP = 1.0  # backtested: 1%+ gaps have real fill edge, 0.5% is noise
 MIN_WR = 0.60
 MAX_PER_SECTOR = 2
-MIN_BASKET = 5
+MIN_BASKET = 1  # even 1 good trade is better than skipping the day
 MAX_BASKET = 10
 SL_ATR_MULT = 0.20  # 0.05 was too tight for tick data at 9:15 — triggered on noise
 TRAIL_ATR_MULT = 0.005
