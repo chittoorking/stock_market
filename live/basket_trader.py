@@ -1046,12 +1046,37 @@ class BasketTrader:
                     if price > 0:
                         last_price_time = time.time()
 
-                # Safety: if no price for 5 min, force close everything
-                # But don't trigger if we're just waiting for flip candidates (no positions)
+                # Safety: if no price for 5 min, try REST reconnect before force closing
                 if self.positions and time.time() - last_price_time > MAX_NO_PRICE_SECS:
-                    log.error('NO PRICE UPDATES for 5 minutes — force closing all positions')
-                    self.close_all()
-                    break
+                    log.warning('No price updates for 5 min — trying REST fallback...')
+                    # Try REST API for each position before giving up
+                    rest_ok = False
+                    for sym in list(self.positions.keys()):
+                        try:
+                            rest_ltp = api.get_ltp([sym])
+                            p = rest_ltp.get(sym, 0)
+                            if p > 0:
+                                rest_ok = True
+                                last_price_time = time.time()
+                                log.info(f'REST fallback working: {sym}={p:.2f}')
+                                break
+                        except Exception:
+                            pass
+                    if not rest_ok:
+                        log.error('REST also failed — trying WebSocket reconnect...')
+                        # Reconnect WebSocket
+                        token = api.get_token()
+                        if token:
+                            self.price_feed.start(token)
+                            time.sleep(5)
+                            scrip_codes = [api.SCRIP_CODES[s] for s in self.positions if s in api.SCRIP_CODES]
+                            self.price_feed.subscribe(scrip_codes)
+                            last_price_time = time.time()  # give it another 5 min
+                            log.info('WebSocket reconnected — resuming monitoring')
+                        else:
+                            log.error('No token available — force closing all positions')
+                            self.close_all()
+                            break
 
                 # Small sleep to prevent CPU spinning, but much faster than 2-sec polling
                 time.sleep(0.1)
