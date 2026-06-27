@@ -751,8 +751,6 @@ class BasketTrader:
                 continue
 
             wr = self.rolling_wr(sym)
-            if wr < MIN_WR:
-                continue
 
             ind = self.compute_indicators(sym)
             if ind is None:
@@ -765,15 +763,29 @@ class BasketTrader:
             if depth_score == 0:
                 continue  # order book says DON'T ENTER
 
-            # EV×gap scoring — picks stocks that make MOST MONEY
-            ev = self.expected_value(sym)
-            score = ev * abs(gap) * depth_score
-
             sl_pct = ind['atr_pct'] * SL_ATR_MULT
             trail_pct = max(ind['atr_pct'] * TRAIL_ATR_MULT, MIN_TRAIL_PCT)
 
-            # gap/ATR = signal-to-noise ratio (for allocation later)
+            # gap/ATR = signal-to-noise ratio
             gap_vs_atr = abs(gap) / ind['atr_pct'] if ind['atr_pct'] > 0 else 1
+
+            # Momentum: gap direction aligns with prev day move
+            prev_day = self.daily_history.get(sym, [])
+            if len(prev_day) >= 1:
+                pd = prev_day[-1]
+                prev_trend = (pd['close'] - pd['open']) / pd['open'] * 100 if pd['open'] > 0 else 0
+            else:
+                prev_trend = 0
+            is_momentum = (gap > 0 and prev_trend > 0.3) or (gap < 0 and prev_trend < -0.3)
+
+            # Composite score: WR×50 + gap×10 - gap_atr×20 + rel<0.8 bonus + momentum bonus
+            ev = self.expected_value(sym)
+            score = (wr * 50
+                     + gap_abs * 10
+                     - gap_vs_atr * 20
+                     + (20 if rel_gap < 0.8 else 0)
+                     + (10 if is_momentum else 0))
+            score *= depth_score  # depth still acts as multiplier
 
             candidates.append({
                 'sym': sym, 'gap': gap, 'price': price, 'prev_close': prev,
