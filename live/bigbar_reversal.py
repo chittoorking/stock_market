@@ -386,8 +386,8 @@ class BigBarTrader:
                     except Exception:
                         pass
 
-                # Fire in batches of 50 (INDmoney drops connections above ~100 concurrent)
-                for batch_start in range(0, len(all_stocks), 50):
+                # Fire in batches of 100 (INDmoney drops connections above ~100 concurrent)
+                for batch_start in range(0, len(all_stocks), 100):
                     batch = all_stocks[batch_start:batch_start+50]
                     threads = [_th.Thread(target=fetch_bar, args=(s,)) for s in batch]
                     for t in threads: t.start()
