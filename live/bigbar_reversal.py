@@ -386,13 +386,10 @@ class BigBarTrader:
                     except Exception:
                         pass
 
-                # Fire all stocks in parallel (batches of 25 threads)
-                for batch_start in range(0, len(all_stocks), 25):
-                    batch = all_stocks[batch_start:batch_start+25]
-                    threads = [_th.Thread(target=fetch_bar, args=(s,)) for s in batch]
-                    for t in threads: t.start()
-                    for t in threads: t.join(timeout=5)
-                    time.sleep(0.1)  # small gap between batches
+                # Fire all stocks in parallel (single batch — upgraded VM handles 500 concurrent)
+                threads = [_th.Thread(target=fetch_bar, args=(s,)) for s in all_stocks]
+                for t in threads: t.start()
+                for t in threads: t.join(timeout=30)
 
                 log.info(f'  Fetched {len(bar_data)} bars in {time.time()-now_t:.1f}s')
 
