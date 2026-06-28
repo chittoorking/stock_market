@@ -731,8 +731,8 @@ class BasketTrader:
             gap = (gap_price - prev) / prev * 100
             gap_abs = abs(gap)
 
-            # Record ALL gaps >= 0.5% for relative gap tracking
-            if gap_abs >= MIN_GAP:
+            # Record ALL gaps >= 0.5% for relative gap tracking (even if below MIN_GAP entry threshold)
+            if gap_abs >= 0.5:
                 self._record_gap(sym, gap_abs)
 
             log.info(f'  {sym}: prev={prev:.2f} open={open_price:.2f} gap={gap:+.2f}%')
