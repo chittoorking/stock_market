@@ -369,30 +369,46 @@ class BigBarTrader:
                     log.info(f'  Skipping bar {self.bar_count} (warming up)')
                     continue
 
-                # Fetch actual 5-min candles for each stock
+                # Fetch actual 5-min candles using persistent sessions
+                # 50 sessions × 10 stocks each = 50 concurrent, ~6s total
                 now_ms = int(time.time() * 1000)
                 bar_start = now_ms - 360000  # last 6 min
 
-                # Parallel fetch candles for all stocks using threads
                 import threading as _th
+                import requests as _req
                 bar_data = {}  # sym -> bar dict
 
-                def fetch_bar(sym):
-                    try:
-                        candles = api.get_historical_candles(sym, "5minute", bar_start, now_ms)
-                        if candles and len(candles) >= 2:
-                            b = candles[-2]  # second-to-last = just-closed bar
-                            bar_data[sym] = {'o': b['o'], 'h': b['h'], 'l': b['l'], 'c': b['c']}
-                    except Exception:
-                        pass
+                def fetch_chunk(syms):
+                    """One session per thread, pipelines requests on same connection."""
+                    session = _req.Session()
+                    session.headers.update(api.headers())
+                    for sym in syms:
+                        scrip = api.SCRIP_CODES.get(sym)
+                        if not scrip:
+                            continue
+                        try:
+                            r = session.get(
+                                f'{api.BASE}/market/historical/5minute?scrip-codes={scrip}&start_time={bar_start}&end_time={now_ms}',
+                                timeout=10)
+                            if r.status_code == 200:
+                                candles = r.json().get('data', {}).get(scrip, {}).get('candles')
+                                if candles and len(candles) >= 2:
+                                    b = candles[-2]
+                                    bar_data[sym] = {'o': b['o'], 'h': b['h'], 'l': b['l'], 'c': b['c']}
+                        except Exception:
+                            pass
+                    session.close()
 
-                # Fire in batches of 100 (INDmoney drops connections above ~100 concurrent)
-                for batch_start in range(0, len(all_stocks), 100):
-                    batch = all_stocks[batch_start:batch_start+50]
-                    threads = [_th.Thread(target=fetch_bar, args=(s,)) for s in batch]
-                    for t in threads: t.start()
-                    for t in threads: t.join(timeout=10)
-                    time.sleep(0.1)
+                n_workers = 50
+                chunk_size = max(1, len(all_stocks) // n_workers)
+                threads = []
+                for i in range(0, len(all_stocks), chunk_size):
+                    chunk = all_stocks[i:i+chunk_size]
+                    t = _th.Thread(target=fetch_chunk, args=(chunk,))
+                    threads.append(t)
+                    t.start()
+                for t in threads:
+                    t.join(timeout=30)
 
                 log.info(f'  Fetched {len(bar_data)} bars in {time.time()-now_t:.1f}s')
 
