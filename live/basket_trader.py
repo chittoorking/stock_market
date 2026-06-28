@@ -817,12 +817,21 @@ class BasketTrader:
             log.warning(f'Only {len(selected)} qualify (need {min_needed}). SKIP.')
             return []
 
+        # Win probability prediction
+        from .win_predictor import get_predictor
+        predictor = get_predictor()
+
         log.info(f'Selected {len(selected)} stocks:')
         for i, c in enumerate(selected):
+            pred = predictor.predict_with_details(
+                c['wr'], abs(c['gap']), c['gap_vs_atr'], c['rel_gap'],
+                c.get('is_momentum', False))
+            c['win_prob'] = pred['probability']
+            c['win_label'] = pred['label']
             log.info(f'  #{i+1}: {c["sym"]:<12s} gap={c["gap"]:+.1f}% '
-                     f'dir={c["direction"]} EV={c["ev"]:.3f} score={c["score"]:.3f} '
+                     f'dir={c["direction"]} P(win)={pred["label"]} '
                      f'WR={c["wr"]:.0%} g/ATR={c["gap_vs_atr"]:.2f} '
-                     f'rel={c["rel_gap"]:.1f}x depth={c["depth_score"]:.2f}')
+                     f'rel={c["rel_gap"]:.1f}x score={c["score"]:.1f}')
         return selected
 
     # ═══════════════════════════════════════════════════════════
