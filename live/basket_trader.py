@@ -531,9 +531,8 @@ class BasketTrader:
         log.info(self.capital_pool.status())
 
         if self.capital < 20000:
-            log.error(f'Capital Rs {self.capital:,} too low. Need at least Rs 20,000 for 5-stock basket.')
-            log.error(f'Below Rs 20K = fewer than 5 stocks = no diversification safety.')
-            return
+            log.warning(f'Capital Rs {self.capital:,} low. Will retry at 9:10 AM.')
+            # Don't return — still load history so indicators work when capital appears
 
         # Optimal basket size by capital slab (backtest-validated with charges)
         # Under 2L: 5 stocks (charges eat profit with more stocks)
@@ -791,7 +790,7 @@ class BasketTrader:
                 'sym': sym, 'gap': gap, 'price': price, 'prev_close': prev,
                 'direction': direction, 'score': score,
                 'wr': wr, 'ev': ev, 'gap_vs_atr': gap_vs_atr,
-                'rel_gap': rel_gap,
+                'rel_gap': rel_gap, 'is_momentum': is_momentum,
                 'sector': SECTORS.get(sym, '?'),
                 'sl_pct': sl_pct, 'trail_pct': trail_pct,
                 'atr_pct': ind['atr_pct'], 'depth_score': depth_score,
