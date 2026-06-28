@@ -91,7 +91,7 @@ ENABLE_FLIPS = True          # S1b: proven +Rs 286/day
 ENABLE_PAIRS = False         # S2: marginal at Rs 50K, enable at Rs 2L+
 ENABLE_SECTOR_UNHEDGED = False  # S2b: short leader only, +Rs 173/day, enable at Rs 2L+
 ENABLE_BB_ALMA = False       # S3: entry validated, exit needs more testing
-ENABLE_BIGBAR = True         # S4: big bar reversal, Rs 530/trade, 87% WR, all day
+ENABLE_BIGBAR = False        # Disabled: 16% WR on 5-min backtest, negative R:R. Needs redesign.
 CIRCUIT_MARGIN = 2.0  # skip stocks within 2% of circuit
 
 # ═══ WEBSOCKET URLs ═══
