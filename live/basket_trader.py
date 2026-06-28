@@ -738,6 +738,11 @@ class BasketTrader:
             if gap_abs < MIN_GAP:
                 continue
 
+            # Hard cap: >5% gap = corporate event (split, bonus, rights), never fills
+            if gap_abs > 5.0:
+                log.info(f'{sym}: gap {gap:+.1f}% > 5% — corporate event, skipping')
+                continue
+
             # [FEATURE 5] Skip stocks near circuit limits
             if self.is_near_circuit(sym, price):
                 log.info(f'{sym}: NEAR CIRCUIT at Rs {price:.2f}, skipping')
