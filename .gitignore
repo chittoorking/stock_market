@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.env
+live/.env
+data/
+live/logs/
+live/scanner_logs/
+vwap_logs/
+live/vwap_logs/
+*.log

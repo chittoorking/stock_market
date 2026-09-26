@@ -1,0 +1,5 @@
+{"ts": "2026-09-11T17:35:26.372316", "component": "positions", "action": "OPEN", "symbol": "SBIN", "pos_id": "test_1", "side": "BUY", "qty": 10, "entry": 850, "order_id": "EQ-1", "strategy": "test"}
+{"ts": "2026-09-11T17:35:26.383826", "component": "positions", "action": "CLOSE", "symbol": "SBIN", "pos_id": "test_1", "reason": "MANUAL", "entry": 850, "exit": 860, "pnl": 100, "pnl_pct": 1.18}
+{"ts": "2026-09-11T17:35:26.385670", "component": "positions", "action": "OPEN", "symbol": "TCS", "pos_id": "test2_2", "side": "BUY", "qty": 5, "entry": 4000, "order_id": "EQ-2", "strategy": "test2"}
+{"ts": "2026-09-11T17:35:26.398277", "component": "positions", "action": "CLOSE", "symbol": "TCS", "pos_id": "test2_2", "reason": "MANUAL", "entry": 4000, "exit": 100, "pnl": -19500, "pnl_pct": -97.5}
+{"ts": "2026-09-11T17:35:26.399658", "component": "positions", "action": "CLOSE", "symbol": "TCS", "pos_id": "test2_2", "reason": "MANUAL", "entry": 4000, "exit": 100, "pnl": -19500, "pnl_pct": -97.5}
