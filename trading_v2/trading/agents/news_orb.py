@@ -96,12 +96,12 @@ class NewsOrbAgent(BaseAgent):
             return
         self._log.info(f'{len(filtered)} trades passed filters')
 
-        # Phase 5: Place limit orders
+        # Phase 5: Watch for breakout, place market orders on confirm
         pending = self._place_limit_orders(filtered)
         if not pending:
             return
 
-        # Phase 6: Monitor fills until 2:45 PM
+        # Phase 6: Create positions for filled breakout orders
         self._process_fills(pending)
 
         self._log.info('=== NEWS ORB DONE ===')
@@ -175,61 +175,97 @@ class NewsOrbAgent(BaseAgent):
         return True
 
     def _place_limit_orders(self, filtered: list) -> list:
-        """FM capital + limit orders. Returns pending list."""
-        pending = []
+        """Watch LTP, place MARKET order only when breakout confirms.
+        BUY: wait for LTP >= ORB high + buffer, then buy at market.
+        SELL: wait for LTP <= ORB low - buffer, then sell at market.
+        """
+        watchlist = []
         for t in filtered:
             sym = t['nse_symbol']
             entry_price = t['entry_price']
             call = t['call']
 
-            # ATR SL with NaN guard
             sl_pct = orb.get_atr_sl(sym)
             if math.isnan(sl_pct) or sl_pct <= 0:
                 sl_pct = 3.0
 
-            # Calculate qty from risk, request margin from FM
             sl_price = entry_price * (1 - sl_pct / 100)
             qty = self._fm.calc_equity_qty(entry_price, sl_price)
-            margin = qty * entry_price / 5  # MIS 5x
+            margin = qty * entry_price / 5
             ok, amount, trade_id = self._fm.request(self.name, sym, margin)
             if not ok:
                 self._log.info(f'FM rejected: {sym} (need Rs {margin:,.0f})')
                 continue
 
-            # Place limit order
-            try:
-                if call == 'BUY':
-                    order_id = self._broker.buy_limit(sym, qty, entry_price)
-                else:
-                    order_id = self._broker.sell(sym, qty, price=entry_price,
-                                                 order_type='LIMIT')
-            except Exception as e:
-                self._log.error(f'Limit failed {sym}: {e}')
-                self._fm.release(trade_id, pnl=0)
-                continue
-
-            pending.append({
+            watchlist.append({
                 'sym': sym, 'call': call, 'entry_price': entry_price,
-                'qty': qty, 'order_id': order_id, 'trade_id': trade_id,
-                'sl_pct': sl_pct, 'projection': t['projection'],
+                'qty': qty, 'trade_id': trade_id, 'sl_pct': sl_pct,
+                'projection': t['projection'],
             })
-            audit('news_orb', 'LIMIT_PLACED', sym, side=call,
-                  entry=entry_price, qty=qty, order_id=order_id)
+            self._log.info(f'WATCHING {sym} {call} for breakout @ {entry_price:.1f}')
+            audit('news_orb', 'WATCHING_BREAKOUT', sym, side=call,
+                  entry=entry_price, qty=qty)
 
-        self._log.info(f'{len(pending)} limit orders placed')
+        if not watchlist:
+            return []
+
+        # Poll LTP every 10s, place MARKET order when breakout confirms
+        pending = []
+        remaining = list(watchlist)
+
+        while remaining:
+            now = datetime.now()
+            if now.hour > 14 or (now.hour == 14 and now.minute >= 45):
+                self._log.info(f'Deadline: {len(remaining)} breakouts not triggered')
+                for w in remaining:
+                    self._fm.release(w['trade_id'], pnl=0)
+                    audit('news_orb', 'BREAKOUT_TIMEOUT', w['sym'])
+                break
+
+            for w in remaining[:]:
+                ltp = self._broker.ltp_safe(w['sym'])
+                if ltp <= 0:
+                    continue
+
+                triggered = False
+                if w['call'] == 'BUY' and ltp >= w['entry_price']:
+                    triggered = True
+                elif w['call'] == 'SELL' and ltp <= w['entry_price']:
+                    triggered = True
+
+                if triggered:
+                    self._log.info(f'BREAKOUT {w["sym"]} {w["call"]} LTP={ltp:.1f} >= {w["entry_price"]:.1f}')
+                    try:
+                        if w['call'] == 'BUY':
+                            order_id = self._broker.buy(w['sym'], w['qty'])
+                        else:
+                            order_id = self._broker.sell(w['sym'], w['qty'])
+
+                        pending.append({
+                            'sym': w['sym'], 'call': w['call'],
+                            'entry_price': ltp, 'qty': w['qty'],
+                            'order_id': order_id, 'trade_id': w['trade_id'],
+                            'sl_pct': w['sl_pct'], 'projection': w['projection'],
+                        })
+                        audit('news_orb', 'BREAKOUT_ENTRY', w['sym'], side=w['call'],
+                              ltp=ltp, qty=w['qty'], order_id=order_id)
+                    except Exception as e:
+                        self._log.error(f'Breakout order failed {w["sym"]}: {e}')
+                        self._fm.release(w['trade_id'], pnl=0)
+                    remaining.remove(w)
+
+            if remaining:
+                time.sleep(10)
+
+        self._log.info(f'{len(pending)} breakout orders filled')
         return pending
 
     def _process_fills(self, pending: list):
-        """Monitor fills via order book. Create positions on fill."""
-        for order_info, fill_price in orb.monitor_fills(self._broker, pending):
-            if fill_price is None:
-                self._fm.release(order_info['trade_id'], pnl=0)
-                self._log.info(f'Cancelled: {order_info["sym"]}')
-                continue
-
+        """Create positions for breakout market orders (already filled)."""
+        for order_info in pending:
             sym = order_info['sym']
             call = order_info['call']
-            actual = fill_price if fill_price > 0 else order_info['entry_price']
+            actual = order_info['entry_price']
             sl_pct = order_info['sl_pct']
 
             if math.isnan(sl_pct) or sl_pct <= 0:
@@ -245,7 +281,7 @@ class NewsOrbAgent(BaseAgent):
                 symbol=sym, side=side, qty=order_info['qty'],
                 entry_price=actual, order_id=order_info['order_id'],
                 strategy=self.name, sl=sl_price,
-                trail_activate_pct=1.0, trail_pct=0.5,
+                trail_activate_pct=0.3, trail_pct=0.15,
                 trade_id=order_info['trade_id'],
             )
-            self._log.info(f'POSITION: {sym} {call} @ {actual} SL={sl_price:.1f}')
+            self._log.info(f'POSITION: {sym} {call} @ {actual:.1f} SL={sl_price:.1f}')
