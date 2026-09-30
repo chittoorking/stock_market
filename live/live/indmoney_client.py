@@ -17,12 +17,8 @@ TOKEN_FILE = Path(__file__).parent.parent / 'data' / 'indmoney_token.txt'
 # Load from data/nifty500_scrips.json if available, else use hardcoded fallback
 import json as _json
 
-# Load ALL NSE scrips (2600+), fall back to Nifty 500
-_ALL_FILE = Path(__file__).parent.parent / 'data' / 'all_nse_scrips.json'
 _SCRIP_FILE = Path(__file__).parent.parent / 'data' / 'nifty500_scrips.json'
-if _ALL_FILE.exists():
-    SCRIP_CODES = _json.loads(_ALL_FILE.read_text())
-elif _SCRIP_FILE.exists():
+if _SCRIP_FILE.exists():
     SCRIP_CODES = _json.loads(_SCRIP_FILE.read_text())
 else:
     # Fallback: NIFTY 50 core (always works)
@@ -56,25 +52,6 @@ else:
     }
 
 # Reverse maps
-# Name-to-symbol lookup (company names, aliases -> trading symbol)
-_NAME_FILE = Path(__file__).parent.parent / 'data' / 'name_to_symbol.json'
-NAME_TO_SYMBOL = _json.loads(_NAME_FILE.read_text()) if _NAME_FILE.exists() else {}
-
-def resolve_symbol(sym):
-    """Try to find trading symbol. Checks scrip codes, then name map."""
-    if sym in SCRIP_CODES:
-        return sym
-    # Try name map (case insensitive)
-    mapped = NAME_TO_SYMBOL.get(sym.upper())
-    if mapped and mapped in SCRIP_CODES:
-        return mapped
-    # Try partial match — strip common suffixes
-    for suffix in ['', ' LTD', ' LIMITED', ' INDIA', ' INDIA LTD']:
-        mapped = NAME_TO_SYMBOL.get((sym + suffix).upper())
-        if mapped and mapped in SCRIP_CODES:
-            return mapped
-    return None
-
 SYM_FROM_SCRIP = {v: k for k, v in SCRIP_CODES.items()}
 # security_id -> our symbol (for matching broker positions)
 SYM_FROM_SEC_ID = {v.split('_')[1]: k for k, v in SCRIP_CODES.items()}
@@ -264,7 +241,6 @@ def get_market_depth(syms):
 def get_historical_candles(sym, interval, start_ts, end_ts):
     """Fetch historical candle data. interval: 1minute, 5minute, 1day etc.
     start_ts, end_ts: unix epoch milliseconds."""
-    exchange = "NSE"
     scrip = SCRIP_CODES.get(sym)
     if not scrip:
         return []
@@ -287,7 +263,6 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', 
     product: 'INTRADAY', 'CNC', 'MARGIN'
     Note: INDstocks converts MARKET to LIMIT at live price.
     """
-    exchange = "NSE"
     scrip = SCRIP_CODES.get(sym)
     if not scrip:
         log.error(f'Unknown instrument: {sym}')
@@ -298,7 +273,7 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', 
 
     order = {
         'txn_type': side,
-        'exchange': exchange,
+        'exchange': 'NSE',
         'segment': 'EQUITY',
         'product': product,
         'order_type': order_type,
@@ -350,7 +325,6 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price=0,
     If trigger_price=0, uses MARKET entry (converted to LIMIT by broker).
     SL/target legs are placed on exchange automatically after fill.
     """
-    exchange = "NSE"
     scrip = SCRIP_CODES.get(sym)
     if not scrip:
         return None
@@ -359,7 +333,7 @@ def place_smart_order(sym, qty, side, limit_price, trigger_price=0,
 
     order = {
         'txn_type': side,
-        'exchange': exchange,
+        'exchange': 'NSE',
         'segment': 'EQUITY',
         'product': 'INTRADAY',
         'order_type': 'LIMIT',
@@ -494,7 +468,6 @@ def get_funds():
 
 def get_margin_required(sym, qty, side, price, product='INTRADAY'):
     """Check margin required before placing an order. Returns dict with total_margin and charges."""
-    exchange = "NSE"
     scrip = SCRIP_CODES.get(sym)
     if not scrip:
         return None
@@ -503,7 +476,7 @@ def get_margin_required(sym, qty, side, price, product='INTRADAY'):
         # API uses GET with JSON body (per docs)
         r = requests.get(f'{BASE}/margin', headers=headers(), json={
             'segment': 'EQUITY',
-            'exchange': exchange,
+            'exchange': 'NSE',
             'securityID': security_id,
             'txnType': side,
             'quantity': str(qty),
@@ -522,73 +495,3 @@ def get_margin_required(sym, qty, side, price, product='INTRADAY'):
     except Exception as e:
         log.error(f'Margin calc error: {e}')
     return None
-
-
-
-def get_fno_positions():
-    """Get F&O/derivative positions."""
-    try:
-        r = requests.get(f'{BASE}/portfolio/positions?segment=derivative&product=margin',
-                        headers=headers(), timeout=10)
-        if r.status_code == 200:
-            return r.json().get('data', [])
-    except Exception as e:
-        log.error(f'FnO positions error: {e}')
-    return []
-
-
-MCX_PREFIXES = ('GOLD', 'SILVER', 'CRUDE', 'NATURAL', 'COPPER', 'ZINC', 'LEAD', 'ALUMIN', 'NICKEL')
-
-def place_fno_order(sym, qty, side, security_id, order_type='MARKET', price=0, product='MARGIN'):
-    """Place FnO order. security_id must be the derivative instrument ID."""
-    is_mcx = sym.upper().startswith(MCX_PREFIXES)
-    exchange = 'MCX' if is_mcx else 'NSE'
-    segment = 'FNO' if is_mcx else 'DERIVATIVE'
-    # MCX commodities: INTRADAY (MIS) for day trades
-    if is_mcx and product == 'MARGIN':
-        product = 'INTRADAY'
-    order = {
-        'txn_type': side,
-        'exchange': exchange,
-        'segment': segment,
-        'product': product,
-        'order_type': order_type,
-        'validity': 'DAY',
-        'security_id': str(security_id),
-        'qty': qty,
-        'algo_id': '99999',
-        'is_amo': False,
-    }
-    if order_type == 'LIMIT':
-        order['limit_price'] = tick_round(price)
-    try:
-        r = requests.post(f'{BASE}/order', headers=headers(), json=order, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if data.get('status') == 'success':
-                oid = data.get('data', {}).get('order_id') or data.get('data', {}).get('id')
-                log.info(f'FnO order: {side} {qty} {sym} sec_id={security_id} -> {oid}')
-                return oid
-        log.error(f'FnO order failed: {r.text[:300]}')
-    except Exception as e:
-        log.error(f'FnO order error: {e}')
-    return None
-
-
-def get_option_chain(sym, expiry_date=None):
-    """Get option chain for a stock. Returns list of strikes with CE/PE data."""
-    exchange = "NSE"
-    scrip = SCRIP_CODES.get(sym)
-    if not scrip:
-        return []
-    security_id = scrip.split('_')[1]
-    try:
-        url = f'{BASE}/market/option-chain?security_id={security_id}'
-        if expiry_date:
-            url += f'&expiry_date={expiry_date}'
-        r = requests.get(url, headers=headers(), timeout=15)
-        if r.status_code == 200:
-            return r.json().get('data', [])
-    except Exception as e:
-        log.error(f'Option chain error: {e}')
-    return []

@@ -1,0 +1,42 @@
+[
+  {
+    "date": "2026-09-01",
+    "index": "NIFTY",
+    "expiry_type": "weekly",
+    "prediction": "DOWN",
+    "confidence": 7,
+    "projection": "?",
+    "dominant_force": "FPI cash market outflow and surging crude oil prices",
+    "bullish_score": "?",
+    "bearish_score": "?",
+    "fpi_dii": "FPI heavy selling vs DII strong buying",
+    "action": "NO TRADE",
+    "reasoning": "Heavy FPI net cash selling of -\u20b97,985 Cr alongside escalating Middle East conflict and rising Brent crude oil prices are keeping Nifty under pressure near the 24,000 support level. While strong domestic institutional (DII) inflows of +\u20b94,588 Cr prevent a total breakdown, derivative max-pain position",
+    "timestamp_predict": "2026-09-01T14:30:14.159353",
+    "actual_direction": "UP",
+    "actual_gap_pct": 0.12,
+    "result": "CORRECT_SKIP",
+    "actual_gap_pts": 29.75,
+    "timestamp_check": "2026-09-01T15:40:20.097793"
+  },
+  {
+    "date": "2026-09-03",
+    "index": "SENSEX",
+    "expiry_type": "weekly",
+    "prediction": "UP",
+    "confidence": 7,
+    "projection": "?",
+    "dominant_force": "Institutional cash inflows and banking sector momentum defending upper strike positions",
+    "bullish_score": "?",
+    "bearish_score": "?",
+    "fpi_dii": "Both buying (FPI net +\u20b96,688 Cr, DII net +\u20b92,812 Cr)",
+    "action": "NO TRADE",
+    "reasoning": "Strong dual institutional buying alongside substantial foreign currency bank mobilisation provides robust liquidity support on Sensex expiry day. Rebounding global equities, steady US futures, and easing US Treasury yields mitigate geopolitical crude headwinds near $95/bbl. Institutional traders in ",
+    "timestamp_predict": "2026-09-03T14:30:14.553879",
+    "actual_direction": "UP",
+    "actual_gap_pct": 0.38,
+    "result": "MISSED_OPPORTUNITY",
+    "actual_gap_pts": 294.52,
+    "timestamp_check": "2026-09-03T15:40:21.625897"
+  }
+]

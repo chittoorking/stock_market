@@ -10,6 +10,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+_ml_enricher = None
+
 # Use project-level logs dir (news-trading/live/logs) if exists, else local
 _project_logs = Path(__file__).parent.parent.parent / 'live' / 'logs'
 LOG_DIR = _project_logs if _project_logs.exists() else Path(__file__).parent.parent / 'logs'
@@ -46,3 +48,14 @@ def audit(component: str, action: str, symbol: str = '', **kw):
         f.write(json.dumps(record, default=str) + '\n')
     detail = ' '.join(f'{k}={v}' for k, v in kw.items())
     _root.getChild(component).info(f'{action} | {symbol} | {detail}')
+
+    # Log ML 94 fields for signal events
+    if symbol and any(tag in action for tag in ['ENTRY', 'SIGNAL', 'TAKE', 'SCORE', 'TRADE']):
+        try:
+            global _ml_enricher
+            if _ml_enricher is None:
+                from trading.services.ml_enricher import log_signal_with_ml
+                _ml_enricher = log_signal_with_ml
+            _ml_enricher(component, action, symbol, **kw)
+        except Exception:
+            pass
