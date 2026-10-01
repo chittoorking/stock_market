@@ -69,6 +69,7 @@ FNO_STOCKS = {
 
 MARKET_FILE = LOG_DIR / f'market_context_{today}.jsonl'
 PREOPEN_FILE = LOG_DIR / f'preopen_{today}.jsonl'
+DEPTH_FILE = LOG_DIR / f'depth_{today}.jsonl'
 ARCHIVE_DIR = Path('/mnt/data/ml_archive')
 
 
@@ -445,6 +446,105 @@ def main():
         except Exception as e:
             log.error(f"Pre-open capture error: {e}")
 
+    # === DEPTH WATCHLIST — poll order book for news signal stocks ===
+    depth_watchlist = set()  # tickers to poll depth for
+    depth_file = open(DEPTH_FILE, 'a', encoding='utf-8')
+
+    def load_depth_watchlist():
+        """Load news signal stocks from today's audit trail."""
+        audit_path = Path(__file__).parent / 'logs' / f'audit_{today}.jsonl'
+        if not audit_path.exists():
+            return
+        try:
+            with open(audit_path) as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                        if r.get('action') in ('SIGNAL_TRADE', 'HEADLINE_FILTERED'):
+                            sym = r.get('symbol', '')
+                            # Extract stock symbol from headline (e.g., "TCI: buyback..." -> "TCI")
+                            if ':' in sym:
+                                sym = sym.split(':')[0].strip()
+                            if sym and len(sym) <= 20 and sym.isalpha():
+                                depth_watchlist.add(sym)
+                    except:
+                        pass
+        except:
+            pass
+
+    def poll_depth(scan_num, ts):
+        """Poll 5-level depth for watchlist stocks via INDmoney."""
+        if not depth_watchlist:
+            return
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from live.indmoney_client import get_full_quote
+            quotes = get_full_quote(list(depth_watchlist))
+            for sym, q in quotes.items():
+                record = {'_scan': scan_num, '_ts': ts, 'ticker': sym}
+                record['ltp'] = q.get('last_price', 0)
+                record['open'] = q.get('open', 0)
+                record['high'] = q.get('high', 0)
+                record['low'] = q.get('low', 0)
+                record['prev_close'] = q.get('prev_close', 0)
+                record['volume'] = q.get('volume', 0)
+                md = q.get('market_depth', {})
+                for scrip_key, scrip_data in md.items():
+                    agg = scrip_data.get('aggregate', {})
+                    tb = agg.get('total_buy', 0)
+                    ts_val = agg.get('total_sell', 0)
+                    if isinstance(tb, str): tb = float(tb.replace(',', ''))
+                    if isinstance(ts_val, str): ts_val = float(ts_val.replace(',', ''))
+                    record['total_buy'] = tb
+                    record['total_sell'] = ts_val
+                    record['buy_pct'] = agg.get('buy_percentage', 50)
+                    record['sell_pct'] = agg.get('sell_percentage', 50)
+                    levels = scrip_data.get('depth', [])
+                    for i, level in enumerate(levels[:5]):
+                        b = level.get('buy', {})
+                        s = level.get('sell', {})
+                        bq = b.get('quantity', '0')
+                        bp = b.get('price', '0')
+                        sq = s.get('quantity', '0')
+                        sp = s.get('price', '0')
+                        if isinstance(bq, str): bq = float(bq.replace(',', ''))
+                        if isinstance(bp, str): bp = float(bp.replace(',', ''))
+                        if isinstance(sq, str): sq = float(sq.replace(',', ''))
+                        if isinstance(sp, str): sp = float(sp.replace(',', ''))
+                        record[f'bid{i}_qty'] = bq
+                        record[f'bid{i}_price'] = bp
+                        record[f'ask{i}_qty'] = sq
+                        record[f'ask{i}_price'] = sp
+                    break
+                depth_file.write(json.dumps(record) + '\n')
+                depth_file.flush()
+        except Exception as e:
+            log.warning(f"Depth poll error: {e}")
+
+    # === PRE-MARKET DEPTH POLLING (9:06-9:15) ===
+    now = datetime.now()
+    if now.hour == 9 and now.minute < 15:
+        log.info("Pre-market depth polling — waiting for news signals...")
+        # Wait until 9:06 (news_orb starts at 9:05, signals by 9:06)
+        wait_for = now.replace(minute=6, second=30)
+        if now < wait_for:
+            time.sleep((wait_for - now).total_seconds())
+
+        load_depth_watchlist()
+        if depth_watchlist:
+            log.info(f"Pre-market depth: watching {len(depth_watchlist)} stocks: {depth_watchlist}")
+            send_tg(f"Pre-market depth: {len(depth_watchlist)} news stocks")
+            pre_scan = 0
+            while datetime.now().hour == 9 and datetime.now().minute < 15:
+                pre_scan += 1
+                ts = datetime.now().strftime('%H:%M:%S')
+                poll_depth(pre_scan, ts)
+                log.info(f"Pre-market depth scan #{pre_scan} @ {ts}")
+                time.sleep(15)  # poll every 15s during pre-open
+        else:
+            log.info("No news signals yet for depth watchlist")
+
     send_tg("CAPTURE Bot LIVE.\nScanning every 60s. All fields saved.\nSignals sent to Telegram (no trading).")
 
     try:
@@ -479,7 +579,13 @@ def main():
                 market_file.write(json.dumps(ctx) + '\n')
                 market_file.flush()
 
-                log.info(f"Scan #{scan} @ {ts} | {len(stocks)} stocks | NIFTY={ctx.get('nifty',0)} VIX={ctx.get('vix',0)}")
+                # === POLL DEPTH for watchlist stocks ===
+                if scan % 5 == 1:  # reload watchlist every 5 scans
+                    load_depth_watchlist()
+                if depth_watchlist:
+                    poll_depth(scan, ts)
+
+                log.info(f"Scan #{scan} @ {ts} | {len(stocks)} stocks | depth={len(depth_watchlist)} | NIFTY={ctx.get('nifty',0)} VIX={ctx.get('vix',0)}")
 
                 # === DETECT SIGNALS ===
                 signals = []
@@ -582,11 +688,13 @@ def main():
     finally:
         data_file.close()
         market_file.close()
+        depth_file.close()
         # Compress and move to /mnt/data at EOD
         _archive_day(DATA_FILE, log)
         _archive_day(MARKET_FILE, log)
         _archive_day(SIGNAL_FILE, log)
         _archive_day(PREOPEN_FILE, log)
+        _archive_day(DEPTH_FILE, log)
 
     # === EOD SUMMARY ===
     total_sigs = len(all_signals_today)
