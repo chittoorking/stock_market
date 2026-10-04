@@ -213,8 +213,10 @@ def resolve_mcx_sec_id(sym: str, broker=None) -> str:
     candidates = []
     for isym, data in instruments.items():
         isym_upper = isym.upper()
-        # Base name must match
-        if base.upper() not in isym_upper.replace(' ', ''):
+        # Base name must match exactly (GOLD != GOLDM)
+        # MCX keys: "GOLD 05 Oct Fut", "GOLDM 05 Oct Fut", "CRUDEOIL 19 Oct Fut"
+        isym_base = isym_upper.split()[0] if ' ' in isym else isym_upper.split()[0]
+        if isym_base != base.upper():
             continue
         # Skip MINI unless requested
         if 'MINI' in isym_upper and 'MINI' not in sym.upper():
