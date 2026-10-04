@@ -423,14 +423,15 @@ def main():
     market_close = now.replace(hour=15, minute=35, second=0, microsecond=0)
 
     if now < market_open:
-        wait = (market_open - now).total_seconds()
-        log.info(f"Waiting {wait:.0f}s for 9:15 AM...")
-        send_tg("CAPTURE Bot started. Waiting for 9:15 AM.\nMode: CAPTURE ONLY — no trades.\nLogging all 94 fields every scan.")
-        time.sleep(wait)
+        # Capture pre-open at ~9:08 BEFORE market opens
+        preopen_time = now.replace(hour=9, minute=8, second=0, microsecond=0)
+        if now < preopen_time:
+            wait_po = (preopen_time - now).total_seconds()
+            log.info(f"Waiting {wait_po:.0f}s for 9:08 AM (pre-open capture)...")
+            send_tg("CAPTURE Bot started. Waiting for pre-open at 9:08.")
+            time.sleep(wait_po)
 
-    # === CAPTURE PRE-OPEN DATA (before 9:15) ===
-    now = datetime.now()
-    if now.hour == 9 and now.minute < 15:
+        # === CAPTURE PRE-OPEN DATA (9:08-9:14) ===
         log.info("Capturing pre-open data...")
         try:
             preopen_all = mkt._get('https://www.nseindia.com/api/market-data-pre-open?key=ALL')
@@ -443,45 +444,59 @@ def main():
                 if gift_data:
                     gift = gift_data.get('giftnifty', {})
                     ind = gift_data.get('indicativenifty50', {})
-                    pf.write(json.dumps({'_type': 'gift_nifty', '_ts': now.strftime('%H:%M:%S'), **gift}) + '\n')
-                    pf.write(json.dumps({'_type': 'indicative_nifty', '_ts': now.strftime('%H:%M:%S'), **ind}) + '\n')
+                    pf.write(json.dumps({'_type': 'gift_nifty', '_ts': datetime.now().strftime('%H:%M:%S'), **gift}) + '\n')
+                    pf.write(json.dumps({'_type': 'indicative_nifty', '_ts': datetime.now().strftime('%H:%M:%S'), **ind}) + '\n')
 
                 # Save FII/DII
                 if fii_data:
                     for item in fii_data:
-                        pf.write(json.dumps({'_type': 'fii_dii', '_ts': now.strftime('%H:%M:%S'), **item}) + '\n')
+                        pf.write(json.dumps({'_type': 'fii_dii', '_ts': datetime.now().strftime('%H:%M:%S'), **item}) + '\n')
 
-                # Save all pre-open prices
+                # Save all pre-open prices with buy/sell imbalance
                 if preopen_all:
                     for po in preopen_all.get('data', []):
                         md = po.get('metadata', {})
                         det = po.get('detail', {})
                         record = {
                             '_type': 'preopen',
-                            '_ts': now.strftime('%H:%M:%S'),
+                            '_ts': datetime.now().strftime('%H:%M:%S'),
                             'symbol': md.get('symbol', ''),
+                            'iep': md.get('iep', 0),
                             'preopen_price': md.get('lastPrice', 0),
                             'prev_close': md.get('previousClose', 0),
                             'change': md.get('change', 0),
                             'pchange': md.get('pChange', 0),
+                            'final_price': md.get('finalPrice', 0),
+                            'final_qty': md.get('finalQuantity', 0),
+                            'total_buy_qty': md.get('totalBuyQuantity', 0),
+                            'total_sell_qty': md.get('totalSellQuantity', 0),
                             'year_high': md.get('yearHigh', 0),
                             'year_low': md.get('yearLow', 0),
-                            'final_qty': md.get('finalQuantity', 0),
+                            'market_cap': md.get('marketCap', 0),
                         }
+                        # Add all detail fields (catches any extra fields NSE adds)
                         record.update({k: v for k, v in det.items() if isinstance(v, (int, float, str))})
+                        # Add all metadata fields we might have missed
+                        for mk in ['totalTradedVolume', 'totalTradedValue', 'ffmc', 'nearWKH', 'nearWKL']:
+                            if mk in md:
+                                record[mk] = md[mk]
                         pf.write(json.dumps(record) + '\n')
 
-                # Save FO pre-open
+                # Save FO pre-open with buy/sell
                 if preopen_fo:
                     for po in preopen_fo.get('data', []):
                         md = po.get('metadata', {})
                         pf.write(json.dumps({
                             '_type': 'preopen_fo',
-                            '_ts': now.strftime('%H:%M:%S'),
+                            '_ts': datetime.now().strftime('%H:%M:%S'),
                             'symbol': md.get('symbol', ''),
+                            'iep': md.get('iep', 0),
                             'preopen_price': md.get('lastPrice', 0),
                             'prev_close': md.get('previousClose', 0),
                             'pchange': md.get('pChange', 0),
+                            'total_buy_qty': md.get('totalBuyQuantity', 0),
+                            'total_sell_qty': md.get('totalSellQuantity', 0),
+                            'final_qty': md.get('finalQuantity', 0),
                         }) + '\n')
 
             po_count = len(preopen_all.get('data', [])) if preopen_all else 0
@@ -494,9 +509,16 @@ def main():
                         fii_net = float(item.get('netValue', 0))
 
             log.info(f"Pre-open: {po_count} stocks, {fo_count} FO, GIFT={gift_price}, FII={fii_net:+,.0f}")
-            send_tg(f"Pre-open captured:\n{po_count} stocks, {fo_count} FO\nGIFT Nifty: {gift_price}\nFII net: Rs {fii_net:+,.0f} Cr")
+            send_tg(f"Pre-open captured: {po_count} stocks, {fo_count} FO, GIFT={gift_price}, FII={fii_net:+,.0f}")
         except Exception as e:
             log.error(f"Pre-open capture error: {e}")
+
+        # Now wait for market open
+        remaining = (market_open - datetime.now()).total_seconds()
+        if remaining > 0:
+            log.info(f"Pre-open done. Waiting {remaining:.0f}s for 9:15...")
+            time.sleep(remaining)
+
 
     # === DEPTH WATCHLIST — poll order book for news signal stocks ===
     depth_watchlist = set()  # tickers to poll depth for
