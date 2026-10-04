@@ -281,7 +281,7 @@ class NewsOrbAgent(BaseAgent):
                 symbol=sym, side=side, qty=order_info['qty'],
                 entry_price=actual, order_id=order_info['order_id'],
                 strategy=self.name, sl=sl_price,
-                trail_activate_pct=0.3, trail_pct=0.15,
+                trail_activate_pct=1.0, trail_pct=0.5,
                 trade_id=order_info['trade_id'],
             )
             self._log.info(f'POSITION: {sym} {call} @ {actual:.1f} SL={sl_price:.1f}')
