@@ -37,6 +37,58 @@ log = logging.getLogger('capture')
 
 DATA_FILE = LOG_DIR / f'ml_data_{today}.jsonl'
 SIGNAL_FILE = LOG_DIR / f'signals_{today}.jsonl'
+YESTERDAY_DLV_FILE = LOG_DIR / 'yesterday_delivery.json'
+ARCHIVE_DIR_PATH = Path('/mnt/data/ml_archive')
+
+
+def _load_yesterday_delivery():
+    """Load yesterday's final delivery % for all stocks.
+    Used to detect stale vs fresh values in today's first update."""
+    # Try saved file first
+    if YESTERDAY_DLV_FILE.exists():
+        try:
+            with open(YESTERDAY_DLV_FILE) as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+
+def _save_today_closing_delivery(stocks):
+    """Save today's closing delivery % for tomorrow's stale detection."""
+    dlv_map = {}
+    for s in stocks:
+        t = s.get('ticker', '')
+        dlv = s.get('deliveryPercentage') or 0
+        if t and dlv > 0:
+            dlv_map[t] = dlv
+    try:
+        with open(YESTERDAY_DLV_FILE, 'w') as f:
+            json.dump(dlv_map, f)
+    except:
+        pass
+
+
+def _detect_fresh_delivery(stocks, yesterday_dlv):
+    """Compare current delivery values against yesterday's.
+    Returns dict of tickers with FRESH (changed) delivery values."""
+    fresh = {}
+    for s in stocks:
+        t = s.get('ticker', '')
+        dlv = s.get('deliveryPercentage') or 0
+        if not t or dlv <= 0:
+            continue
+        yesterday = yesterday_dlv.get(t, 0)
+        if yesterday > 0 and abs(dlv - yesterday) > 0.5:
+            # Value changed from yesterday = fresh NSE update
+            fresh[t] = {
+                'yesterday': yesterday,
+                'today': dlv,
+                'change': dlv - yesterday,
+                'ltp': s.get('lastTradedPrice') or 0,
+                'vwap': s.get('avgPrice') or 0,
+            }
+    return fresh
 
 FNO_STOCKS = {
     'RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','SBIN','BHARTIARTL','ITC',
@@ -545,6 +597,11 @@ def main():
         else:
             log.info("No news signals yet for depth watchlist")
 
+    # Load yesterday's delivery for stale detection
+    yesterday_dlv = _load_yesterday_delivery()
+    fresh_delivery_detected = {}  # ticker -> first fresh reading
+    log.info(f"Yesterday delivery loaded: {len(yesterday_dlv)} stocks")
+
     send_tg("CAPTURE Bot LIVE.\nScanning every 60s. All fields saved.\nSignals sent to Telegram (no trading).")
 
     try:
@@ -586,6 +643,33 @@ def main():
                     poll_depth(scan, ts)
 
                 log.info(f"Scan #{scan} @ {ts} | {len(stocks)} stocks | depth={len(depth_watchlist)} | NIFTY={ctx.get('nifty',0)} VIX={ctx.get('vix',0)}")
+
+                # === DETECT FRESH DELIVERY CHANGES ===
+                if yesterday_dlv:
+                    fresh = _detect_fresh_delivery(stocks, yesterday_dlv)
+                    new_fresh = {t: v for t, v in fresh.items() if t not in fresh_delivery_detected}
+                    if new_fresh:
+                        fresh_delivery_detected.update(new_fresh)
+                        # Log and alert significant changes
+                        big_drops = {t: v for t, v in new_fresh.items() if v['change'] < -10}
+                        big_rises = {t: v for t, v in new_fresh.items() if v['change'] > 10}
+                        if big_drops or big_rises:
+                            lines = [f"DELIVERY CHANGES @ {ts} (scan #{scan})"]
+                            for t, v in sorted(big_drops.items(), key=lambda x: x[1]['change']):
+                                lines.append(f"  DROP {t}: {v['yesterday']:.0f}% -> {v['today']:.0f}% ({v['change']:+.0f}pts) LTP={v['ltp']:.1f}")
+                            for t, v in sorted(big_rises.items(), key=lambda x: -x[1]['change']):
+                                lines.append(f"  RISE {t}: {v['yesterday']:.0f}% -> {v['today']:.0f}% ({v['change']:+.0f}pts) LTP={v['ltp']:.1f}")
+                            log.info('\n'.join(lines))
+                            if len(big_drops) + len(big_rises) <= 20:
+                                send_tg('\n'.join(lines))
+
+                        # Save fresh delivery data to signal file
+                        for t, v in new_fresh.items():
+                            with open(SIGNAL_FILE, 'a') as sf:
+                                sf.write(json.dumps({
+                                    '_type': 'delivery_change', '_scan': scan, '_ts': ts,
+                                    'ticker': t, **v,
+                                }) + '\n')
 
                 # === DETECT SIGNALS ===
                 signals = []
@@ -727,6 +811,15 @@ def main():
     summary = '\n'.join(lines)
     log.info(summary)
     send_tg(summary)
+    # Save today's closing delivery for tomorrow's stale detection
+    try:
+        last_stocks = ml.poll()
+        if last_stocks:
+            _save_today_closing_delivery(last_stocks)
+            log.info(f"Saved closing delivery for {len(last_stocks)} stocks")
+    except:
+        pass
+
     log.info("Capture bot stopped.")
 
 

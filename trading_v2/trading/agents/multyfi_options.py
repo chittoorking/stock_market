@@ -118,7 +118,10 @@ class MulOptions(BaseAgent):
 
         if score >= threshold:
             self._log.info(f'TAKE {symbol} {opt_type} {strike} score={score} (min={threshold})')
-            self._open_option(signal, opt_type, score, action)
+            # Route to _handle_option via fd dict
+            fd = dict(opt)
+            fd['action'] = action
+            self._handle_option(symbol, signal, fd, is_commodity, opt_type)
         else:
             self._log.info(f'SKIP {symbol} {opt_type} {strike} score={score} (min={threshold})')
 
@@ -276,23 +279,21 @@ class MulOptions(BaseAgent):
         if score < threshold:
             return
 
-        # Resolve sec_id
+        # Resolve sec_id — ALWAYS use numeric sec_id from instrument master
         instrument = fd.get('instrument', fd.get('stockSymbol', ''))
         if is_commodity:
-            # MCX: resolve from MCX instrument master
             sec_id = symbol_resolver.resolve_mcx_sec_id(sym, self._broker)
-        elif instrument:
-            # NSE: use Multyfi's instrument ID directly
-            # "NFO:SBIN26SEPFUT" -> "SBIN26SEPFUT"
-            sec_id = instrument.split(':')[-1] if ':' in instrument else instrument
-            self._log.info(f'{sym}: using Multyfi instrument {sec_id}')
         else:
-            # Fallback: use the stockSymbol as sec_id
-            sec_id = sym
-            self._log.info(f'{sym}: using symbol as sec_id')
+            # Try Multyfi's instrument field first (e.g. "NFO:HDFCBANK26OCTFUT")
+            trading_sym = ''
+            if instrument:
+                trading_sym = instrument.split(':')[-1] if ':' in instrument else instrument
+            if not trading_sym:
+                trading_sym = sym  # sym itself may be "HDFCBANK26OCTFUT"
+            sec_id = symbol_resolver.resolve_fno_sec_id(trading_sym)
 
         if not sec_id:
-            self._log.warning(f'{sym}: no sec_id')
+            self._log.warning(f'{sym}: no sec_id for futures')
             return
 
         sl = fut_sl if fut_sl > 0 else (entry_price * 0.98 if entry_price > 0 else 0)
@@ -336,7 +337,7 @@ class MulOptions(BaseAgent):
             'action': action, 'instrument': instrument,
         }
 
-        # Score
+        # Score (skip if already scored in _handle_premium_item)
         if is_commodity:
             score = PE_MIN_SCORE
         elif opt_type == 'PE':
@@ -354,10 +355,11 @@ class MulOptions(BaseAgent):
 
         self._log.info(f'TAKE {sym} {opt_type} score={score} (min={threshold})')
 
-        # Resolve instrument
+        # Resolve instrument to numeric sec_id
         sec_id, premium = symbol_resolver.resolve_option_sec_id(
             sym, opt_type, sig['strike'], instrument, self._broker)
         if not sec_id:
+            self._log.warning(f'{sym} {opt_type}: could not resolve sec_id')
             return
 
         opt_premium = premium or entry_price
