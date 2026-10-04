@@ -247,8 +247,49 @@ class NewsOrbAgent(BaseAgent):
                             'order_id': order_id, 'trade_id': w['trade_id'],
                             'sl_pct': w['sl_pct'], 'projection': w['projection'],
                         })
-                        audit('news_orb', 'BREAKOUT_ENTRY', w['sym'], side=w['call'],
-                              ltp=ltp, qty=w['qty'], order_id=order_id)
+                        # Log entry with all available data
+                        entry_data = {'side': w['call'], 'ltp': ltp, 'qty': w['qty'],
+                                      'order_id': order_id, 'entry_price': w['entry_price'],
+                                      'sl_pct': w['sl_pct'], 'projection': w['projection']}
+                        # Add VWAP + delivery from ML enricher
+                        try:
+                            from trading.services.ml_enricher import get_ml_snapshot, _get_broker_data
+                            ml = get_ml_snapshot(w['sym'])
+                            if ml:
+                                entry_data['vwap'] = ml.get('avgPrice', 0)
+                                entry_data['delivery_pct'] = ml.get('deliveryPercentage', 0)
+                                entry_data['volume'] = ml.get('volume', 0)
+                                entry_data['day_volatility'] = ml.get('dayVolatility', 0)
+                                entry_data['pe'] = ml.get('peRatio', 0)
+                                entry_data['market_cap'] = ml.get('marketCap', 0)
+                                entry_data['one_week_return'] = ml.get('oneWeekReturn', 0)
+                                entry_data['promoter_holding'] = ml.get('promoterHolding', 0)
+                                entry_data['ocf'] = ml.get('operatingCashFlow', 0)
+                            bd = _get_broker_data(w['sym'])
+                            if bd:
+                                entry_data['depth_buy_pct'] = bd.get('depth_buy_pct', 0)
+                                entry_data['depth_total_buy'] = bd.get('depth_total_buy', 0)
+                                entry_data['depth_total_sell'] = bd.get('depth_total_sell', 0)
+                                entry_data['spread_pct'] = bd.get('spread_pct', 0)
+                        except Exception:
+                            pass
+                        # Add pre-open data if available
+                        try:
+                            import json
+                            from pathlib import Path
+                            preopen_file = Path(__file__).parent.parent.parent.parent / 'live' / 'vwap_logs' / f'preopen_{datetime.now().strftime("%Y%m%d")}.jsonl'
+                            if preopen_file.exists():
+                                with open(preopen_file) as pf:
+                                    for line in pf:
+                                        po = json.loads(line)
+                                        if po.get('symbol') == w['sym'] and po.get('_type') == 'preopen':
+                                            entry_data['preopen_buy_qty'] = po.get('total_buy_qty', 0)
+                                            entry_data['preopen_sell_qty'] = po.get('total_sell_qty', 0)
+                                            entry_data['preopen_iep'] = po.get('iep', 0)
+                                            break
+                        except Exception:
+                            pass
+                        audit('news_orb', 'BREAKOUT_ENTRY', w['sym'], **entry_data)
                     except Exception as e:
                         self._log.error(f'Breakout order failed {w["sym"]}: {e}')
                         self._fm.release(w['trade_id'], pnl=0)

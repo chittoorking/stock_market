@@ -28,7 +28,9 @@ while _project_root.name != 'news-trading' and _project_root != _project_root.pa
     _project_root = _project_root.parent
 LOG_DIR = _project_root / 'live' / 'vwap_logs'
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-_signal_log = LOG_DIR / f'ml_signals_{datetime.now().strftime("%Y%m%d")}.jsonl'
+def _get_signal_log():
+    return LOG_DIR / f'ml_signals_{datetime.now().strftime("%Y%m%d")}.jsonl'
+
 
 
 def _init():
@@ -308,7 +310,7 @@ def log_signal_with_ml(component: str, action: str, symbol: str, **kw):
         **kw,
     }
     try:
-        with open(_signal_log, 'a') as f:
+        with open(_get_signal_log(), 'a') as f:
             f.write(json.dumps(record, default=str) + '\n')
     except:
         pass

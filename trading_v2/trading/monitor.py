@@ -116,8 +116,15 @@ class Monitor:
 
     def _exit(self, pos_id: str, exit_price: float = 0, reason: str = 'MANUAL'):
         pos = self._pos.close(pos_id, exit_price=exit_price, reason=reason)
-        if pos and pos.trade_id:
-            self._fm.release(pos.trade_id, pnl=pos.pnl)
+        if pos:
+            audit('monitor', 'EXIT', pos.symbol, reason=reason,
+                  entry=pos.entry_price, exit=round(pos.exit_price, 2),
+                  pnl=round(pos.pnl, 2), pnl_pct=round(pos.pnl_pct, 2),
+                  side=pos.side.value, qty=pos.qty,
+                  peak=round(pos.peak_price, 2) if pos.peak_price else 0,
+                  trail_active=pos.trail_active)
+            if pos.trade_id:
+                self._fm.release(pos.trade_id, pnl=pos.pnl)
 
     def force_exit(self, symbol: str, reason: str = 'SIGNAL_EXIT',
                    strategy: str = None) -> bool:
