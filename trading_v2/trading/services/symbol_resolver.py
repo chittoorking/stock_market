@@ -209,15 +209,23 @@ def resolve_mcx_sec_id(sym: str, broker=None) -> str:
         return ''
 
     today = datetime.now().strftime('%Y-%m-%d')
+    is_fut = sym.upper().endswith('FUT')
     candidates = []
     for isym, data in instruments.items():
-        if base.upper() in isym.upper().replace(' ', ''):
-            if 'MINI' in isym.upper() and 'MINI' not in sym.upper():
-                continue
-            exp = data.get('expiry', '9999-99-99')
-            if exp < today:
-                continue
-            candidates.append((isym, data))
+        isym_upper = isym.upper()
+        # Base name must match
+        if base.upper() not in isym_upper.replace(' ', ''):
+            continue
+        # Skip MINI unless requested
+        if 'MINI' in isym_upper and 'MINI' not in sym.upper():
+            continue
+        # If looking for futures, only match futures
+        if is_fut and 'FUT' not in isym_upper:
+            continue
+        exp = data.get('expiry', '9999-99-99')
+        if exp < today:
+            continue
+        candidates.append((isym, data))
 
     if not candidates:
         log.warning(f'MCX no match for {sym}')
