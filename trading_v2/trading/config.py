@@ -9,8 +9,8 @@ CE_MIN_SCORE = 19          # 84% WR
 FUT_MIN_SCORE = 5          # 89% WR on 166 trades
 
 # ── Fund manager ────────────────────────────────────────────────────
-MAX_CONCURRENT = 6
-MAX_PER_STRATEGY = 3
+MAX_CONCURRENT = 10
+MAX_PER_STRATEGY = 5
 DAILY_LOSS_PCT = 10.0
 EQUITY_RISK_PCT = 2.0
 

@@ -31,15 +31,15 @@ from trading.logger import get_logger
 log = get_logger('main')
 
 AGENTS = {
-    # 'equity_notif':    'trading.agents.equity_notif:EquityNotifAgent',  # DISABLED — using multyfi instead
+    'anomaly':         'trading.agents.anomaly:AnomalyAgent',
+    # PAPER MODE — logging only, no trades
     'news_orb':        'trading.agents.news_orb:NewsOrbAgent',
     'multyfi_options': 'trading.agents.multyfi_options:MulOptions',
-    # 'cas':             'trading.agents.cas:CasAgent',  # DISABLED - no edge, buggy, lost Rs 20K on 1 live day
     'ipo':             'trading.agents.ipo:IpoAgent',
 }
 
 # Agents with custom run() — started as background threads
-AUTONOMOUS = {'news_orb', 'multyfi_options', 'ipo'}
+AUTONOMOUS = {'anomaly', 'news_orb', 'multyfi_options', 'ipo'}
 
 
 def _load(path: str):

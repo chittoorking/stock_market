@@ -18,6 +18,7 @@ from trading.config import (PE_MIN_SCORE, CE_MIN_SCORE, FUT_MIN_SCORE,
 
 class MulOptions(BaseAgent):
     name = 'multyfi_options'
+    PAPER_MODE = True  # Log signals but don't place orders
 
     def __init__(self, broker, positions, fund_manager, monitor):
         super().__init__(broker, positions, fund_manager, monitor)
@@ -251,6 +252,10 @@ class MulOptions(BaseAgent):
             conviction=7,
             reason=f'multyfi equity {action}',
         )
+        if self.PAPER_MODE:
+            self._log.info(f'PAPER: {req.symbol} {req.side.value} @ {req.entry}')
+            audit('multyfi', 'PAPER_SIGNAL', req.symbol, side=req.side.value, entry=req.entry, reason=req.reason)
+            return
         self.submit(req)
 
     def _handle_futures(self, sym, signal, fd, is_commodity):
