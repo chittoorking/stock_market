@@ -423,16 +423,42 @@ def main():
     market_close = now.replace(hour=15, minute=35, second=0, microsecond=0)
 
     if now < market_open:
-        # Capture pre-open at ~9:08 BEFORE market opens
-        preopen_time = now.replace(hour=9, minute=8, second=0, microsecond=0)
-        if now < preopen_time:
-            wait_po = (preopen_time - now).total_seconds()
-            log.info(f"Waiting {wait_po:.0f}s for 9:08 AM (pre-open capture)...")
-            send_tg("CAPTURE Bot started. Waiting for pre-open at 9:08.")
+        # Poll 1: at 9:07 — DURING pre-open session (buy/sell qty available)
+        poll1_time = now.replace(hour=9, minute=7, second=0, microsecond=0)
+        if now < poll1_time:
+            wait_po = (poll1_time - now).total_seconds()
+            log.info(f"Waiting {wait_po:.0f}s for 9:07 AM (pre-open order flow)...")
+            send_tg("CAPTURE Bot started. Waiting for pre-open at 9:07.")
             time.sleep(wait_po)
 
-        # === CAPTURE PRE-OPEN DATA (9:08-9:14) ===
-        log.info("Capturing pre-open data...")
+        # === POLL 1: ORDER FLOW (9:07 — before session closes) ===
+        log.info("Pre-open poll 1: order flow at 9:07...")
+        preopen_orderflow = {}
+        try:
+            po1_all = mkt._get('https://www.nseindia.com/api/market-data-pre-open?key=ALL')
+            po1_fo = mkt._get('https://www.nseindia.com/api/market-data-pre-open?key=FO')
+            if po1_all:
+                for po in po1_all.get('data', []):
+                    md = po.get('metadata', {})
+                    sym = md.get('symbol', '')
+                    if sym:
+                        preopen_orderflow[sym] = {
+                            'buy_qty_907': md.get('totalBuyQuantity', 0),
+                            'sell_qty_907': md.get('totalSellQuantity', 0),
+                            'iep_907': md.get('iep', 0),
+                        }
+            log.info(f"Pre-open poll 1: {len(preopen_orderflow)} stocks with order flow")
+        except Exception as e:
+            log.error(f"Pre-open poll 1 error: {e}")
+
+        # Wait for session to close (9:08)
+        now2 = datetime.now()
+        poll2_time = now2.replace(hour=9, minute=8, second=5, microsecond=0)
+        if now2 < poll2_time:
+            time.sleep((poll2_time - now2).total_seconds())
+
+        # === POLL 2: FINAL IEP (9:08 — after session closes) ===
+        log.info("Pre-open poll 2: final IEP at 9:08...")
         try:
             preopen_all = mkt._get('https://www.nseindia.com/api/market-data-pre-open?key=ALL')
             preopen_fo = mkt._get('https://www.nseindia.com/api/market-data-pre-open?key=FO')
@@ -457,11 +483,16 @@ def main():
                     for po in preopen_all.get('data', []):
                         md = po.get('metadata', {})
                         det = po.get('detail', {})
+                        # Merge order flow from poll 1 (9:07)
+                        sym_of = preopen_orderflow.get(md.get('symbol', ''), {})
                         record = {
                             '_type': 'preopen',
                             '_ts': datetime.now().strftime('%H:%M:%S'),
                             'symbol': md.get('symbol', ''),
                             'iep': md.get('iep', 0),
+                            'buy_qty_907': sym_of.get('buy_qty_907', 0),
+                            'sell_qty_907': sym_of.get('sell_qty_907', 0),
+                            'iep_907': sym_of.get('iep_907', 0),
                             'preopen_price': md.get('lastPrice', 0),
                             'prev_close': md.get('previousClose', 0),
                             'change': md.get('change', 0),
