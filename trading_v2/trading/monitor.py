@@ -49,13 +49,53 @@ class Monitor:
     def _tick(self):
         now = datetime.now()
 
-        # EOD 3:10 PM
+        # EOD 3:10 PM — close everything, verify with broker
         if now.hour > 15 or (now.hour == 15 and now.minute >= 10):
             active = self._pos.active()
             if active:
                 log.info(f'EOD: closing {len(active)} positions')
                 for p in active:
                     self._exit(p.id, reason='EOD_EXIT')
+
+            # Verify broker has zero positions — keep trying until clean
+            import time as _t
+            for verify_attempt in range(5):
+                _t.sleep(3)
+                try:
+                    from live.indmoney_client import get_positions
+                    broker_pos = get_positions() or []
+                    open_pos = [p for p in broker_pos if abs(p.get('net_qty', 0)) > 0]
+                    if not open_pos:
+                        log.info('EOD: broker confirmed zero positions')
+                        break
+                    # Still have positions — force close with wider price
+                    log.warning(f'EOD: broker still has {len(open_pos)} positions, attempt {verify_attempt+2}')
+                    for bp in open_pos:
+                        sym = bp.get('symbol', '')
+                        qty = abs(bp.get('net_qty', 0))
+                        is_short = bp.get('net_qty', 0) < 0
+                        if qty <= 0 or not sym:
+                            continue
+                        ltp = self._broker.ltp_safe(sym)
+                        if ltp <= 0:
+                            continue
+                        # Widen buffer on each retry: 0.5%, 1%, 2%, 3%, 5%
+                        buffer = [0.005, 0.01, 0.02, 0.03, 0.05][min(verify_attempt, 4)]
+                        try:
+                            if is_short:
+                                price = round(ltp * (1 + buffer), 2)
+                                self._broker.buy(sym, qty, price=price,
+                                                order_type='LIMIT', validity='IOC')
+                            else:
+                                price = round(ltp * (1 - buffer), 2)
+                                self._broker.sell(sym, qty, price=price,
+                                                 order_type='LIMIT', validity='IOC')
+                            log.info(f'EOD retry: {sym} qty={qty} price={price} buffer={buffer*100:.1f}%')
+                        except Exception as e:
+                            log.error(f'EOD retry failed {sym}: {e}')
+                except Exception as e:
+                    log.error(f'EOD verify error: {e}')
+
             return
 
         # Batch LTP for all positions at once (faster than one-by-one)
