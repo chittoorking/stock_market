@@ -236,7 +236,10 @@ class AnomalyAgent(BaseAgent):
         sl_limit = round(sl_trigger * 1.001, 2)  # SL limit slightly above trigger
 
         try:
-            result = self._broker.sell_smart(sym, qty, live_ltp, sl_trigger, sl_limit)
+            # Entry at 0.1% below LTP — fills instantly for shorts
+            # If it doesn't fill, stock is too strong to short
+            entry_price = round(live_ltp * 0.999, 2)
+            result = self._broker.sell_smart(sym, qty, entry_price, sl_trigger, sl_limit)
             parent_id = result.get('parent', '')
             child_id = result.get('child', '')
 
