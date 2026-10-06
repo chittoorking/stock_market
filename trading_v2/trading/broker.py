@@ -41,11 +41,12 @@ class Broker:
     # ── Orders ──
 
     def buy(self, sym: str, qty: int, price: float = 0,
-            order_type: str = 'MARKET', product: str = 'INTRADAY') -> str:
+            order_type: str = 'MARKET', product: str = 'INTRADAY',
+            validity: str = 'DAY') -> str:
         self._check_sym(sym)
-        audit('broker', 'BUY_SUBMIT', sym, qty=qty, price=price, order_type=order_type)
+        audit('broker', 'BUY_SUBMIT', sym, qty=qty, price=price, order_type=order_type, validity=validity)
         oid = self._api.place_order(sym, qty, 'BUY', price=price,
-                                     order_type=order_type, product=product)
+                                     order_type=order_type, product=product, validity=validity)
         if not oid:
             audit('broker', 'BUY_FAILED', sym, qty=qty)
             raise BrokerError(f'BUY {sym} qty={qty}: returned None')
