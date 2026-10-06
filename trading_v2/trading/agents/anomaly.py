@@ -320,6 +320,16 @@ class AnomalyAgent(BaseAgent):
                 self._fm.release(trade_id, pnl=0)
                 return
 
+            # Release excess margin if partial fill
+            actual_margin = actual_qty * actual_price / 5
+            if actual_margin < margin * 0.9:  # more than 10% less
+                self._fm.release(trade_id, pnl=0)
+                ok2, _, trade_id = self._fm.request(self.name, sym, actual_margin)
+                if not ok2:
+                    self._log.error(f'{sym}: FM re-request failed')
+                    return
+                self._log.info(f'{sym}: partial fill {actual_qty}/{qty}, margin Rs {margin:.0f} -> Rs {actual_margin:.0f}')
+
             sl_price = round(actual_price * (1 + SL_PCT / 100), 2)
 
             self._positions.open(
