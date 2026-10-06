@@ -53,11 +53,12 @@ class Broker:
         return oid
 
     def sell(self, sym: str, qty: int, price: float = 0,
-             order_type: str = 'MARKET', product: str = 'INTRADAY') -> str:
+             order_type: str = 'MARKET', product: str = 'INTRADAY',
+             validity: str = 'DAY') -> str:
         self._check_sym(sym)
         audit('broker', 'SELL_SUBMIT', sym, qty=qty)
         oid = self._api.place_order(sym, qty, 'SELL', price=price,
-                                     order_type=order_type, product=product)
+                                     order_type=order_type, product=product, validity=validity)
         if not oid:
             audit('broker', 'SELL_FAILED', sym, qty=qty)
             raise BrokerError(f'SELL {sym} qty={qty}: returned None')

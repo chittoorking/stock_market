@@ -280,7 +280,7 @@ def get_historical_candles(sym, interval, start_ts, end_ts):
     return []
 
 
-def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', trigger_price=0):
+def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', trigger_price=0, validity='DAY'):
     """Place order via INDstocks API.
     side: 'BUY' or 'SELL'
     order_type: 'MARKET', 'LIMIT'
@@ -302,7 +302,7 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', 
         'segment': 'EQUITY',
         'product': product,
         'order_type': order_type,
-        'validity': 'DAY',
+        'validity': validity,
         'security_id': security_id,
         'qty': qty,
         'algo_id': '99999',

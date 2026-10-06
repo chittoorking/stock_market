@@ -204,8 +204,9 @@ class AnomalyAgent(BaseAgent):
             self._enter_short(s)
 
     def _enter_short(self, s):
-        """Enter SHORT via smart order (entry + SL on exchange).
-        Trail and exit handled by our monitor."""
+        """Enter SHORT via LIMIT IOC order.
+        Fills instantly at LTP-0.1%. Unfilled auto-cancelled.
+        SL + trail handled by monitor."""
         sym = s['ticker']
         ltp = s['ltp']
 
@@ -231,45 +232,66 @@ class AnomalyAgent(BaseAgent):
             self._log.info(f'{sym}: FM rejected (need Rs {margin:,.0f})')
             return
 
-        # Smart order: entry SELL at LTP + SL at 2% above
-        sl_trigger = round(live_ltp * (1 + SL_PCT / 100), 2)
-        sl_limit = round(sl_trigger * 1.001, 2)  # SL limit slightly above trigger
-
         try:
-            # Entry at 0.1% below LTP — fills instantly for shorts
-            # If it doesn't fill, stock is too strong to short
+            # LIMIT IOC at 0.1% below LTP — fills instantly for shorts
+            # If doesn't fill = stock too strong = dodged a bullet
             entry_price = round(live_ltp * 0.999, 2)
-            result = self._broker.sell_smart(sym, qty, entry_price, sl_trigger, sl_limit)
-            parent_id = result.get('parent', '')
-            child_id = result.get('child', '')
+            order_id = self._broker.sell(sym, qty, price=entry_price,
+                                         order_type='LIMIT', product='INTRADAY',
+                                         validity='IOC')
+
+            # Check actual fill after 2 seconds
+            import time; time.sleep(2)
+            filled, fill_price = self._broker.order_filled(order_id)
+
+            if not filled:
+                self._log.info(f'{sym}: IOC no fill — too strong to short')
+                self._fm.release(trade_id, pnl=0)
+                return
+
+            # Get actual filled qty from order book
+            actual_qty = qty  # default
+            actual_price = fill_price if fill_price > 0 else entry_price
+            try:
+                book = self._broker._api.get_order_book() or []
+                for o in book:
+                    if o.get('id') == order_id or o.get('order_id') == order_id:
+                        actual_qty = int(o.get('traded_qty', qty) or qty)
+                        tp = o.get('traded_price', 0)
+                        if tp and float(tp) > 0:
+                            actual_price = float(tp)
+                        break
+            except Exception:
+                pass
+
+            if actual_qty <= 0:
+                self._log.info(f'{sym}: filled qty=0')
+                self._fm.release(trade_id, pnl=0)
+                return
+
+            sl_price = round(actual_price * (1 + SL_PCT / 100), 2)
 
             self._positions.open(
-                symbol=sym, side=Side.SELL, qty=qty,
-                entry_price=live_ltp, order_id=parent_id,
-                strategy=self.name, sl=sl_trigger,
+                symbol=sym, side=Side.SELL, qty=actual_qty,
+                entry_price=actual_price, order_id=order_id,
+                strategy=self.name, sl=sl_price,
                 trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                 trade_id=trade_id,
             )
-            # Store child (SL) order ID for cancellation when trail exits
-            pos = self._positions.find_by_symbol(sym)
-            if pos:
-                pos.fno_sec_id = child_id  # reuse fno_sec_id field to store SL order ID
-
             self._entered.add(sym)
 
             audit('anomaly', 'ENTRY', sym,
-                  side='SHORT', qty=qty, entry=round(live_ltp, 2),
-                  sl=round(sl_trigger, 2), margin=round(margin, 0),
+                  side='SHORT', qty=actual_qty, entry=round(actual_price, 2),
+                  sl=round(sl_price, 2), margin=round(margin, 0),
                   score=s['anomaly_score'], residual=round(s['residual'], 1),
                   sector=s['sector'], gap=round(s['gap'], 2),
-                  parent_oid=parent_id, child_oid=child_id)
+                  requested_qty=qty, order_id=order_id)
 
-            self._log.info(f'SMART SHORT {sym} qty={qty} @ {live_ltp:.1f} '
-                          f'SL={sl_trigger:.1f} score={s["anomaly_score"]} '
-                          f'residual={s["residual"]:+.1f} '
-                          f'parent={parent_id} child={child_id}')
+            self._log.info(f'SHORT {sym} filled={actual_qty}/{qty} @ {actual_price:.1f} '
+                          f'SL={sl_price:.1f} score={s["anomaly_score"]} '
+                          f'residual={s["residual"]:+.1f}')
         except Exception as e:
-            self._log.error(f'{sym}: smart order failed: {e}')
+            self._log.error(f'{sym}: order failed: {e}')
             self._fm.release(trade_id, pnl=0)
 
     def _fetch_market_lens(self):
