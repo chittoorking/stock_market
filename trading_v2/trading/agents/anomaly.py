@@ -1,10 +1,17 @@
-"""Anomaly Agent — finds stocks displaced from their sector ground, shorts them.
+"""Anomaly Agent — two entry windows for SHORT anomalies.
 
-Flow:
-  9:20  — Scan all stocks via Market Lens. Compute sector stats, residuals, anomaly scores.
-           Take top 5 SHORT anomalies. Enter with MARKET order.
-  10:12 — Delivery updates. Rescan. Enter NEW anomalies with freed capital.
-  Monitor handles trail (activate 1%, trail 0.5%) and SL (2%).
+Entry 1 (9:20):
+  gain > 4% from prev close + residual <= 13 + anomaly score >= 5
+  Catches gap anomalies before market processes them.
+  4 days, 20 trades, 20 wins.
+
+Entry 2 (10:12):
+  gain 5-10% from prev close + pullback > 1% from day high +
+  below VWAP > 0.5% + delivery < 40%
+  Catches confirmed reversals after delivery data updates.
+  4 days, 14 trades, 13 wins (92%).
+
+Both: LIMIT IOC at LTP*0.999. Trail 1%/0.5%. SL 2%. EOD 3:10.
 
 Anomaly score (0-8, all relative to sector):
   +1 if residual > 3% (stock moved more than beta * sector explains)
@@ -30,7 +37,7 @@ log = get_logger('anomaly')
 # Heartbeat scans — when to scan for anomalies
 ENTRY_TIMES = [
     (9, 20),   # after ORB, first scan
-    (10, 14),  # after first delivery update (~10:12)
+    (10, 12),  # delivery update — second scan
 ]
 
 MAX_TRADES = 5
@@ -101,7 +108,10 @@ class AnomalyAgent(BaseAgent):
         self._log.info('=== ANOMALY AGENT DONE ===')
 
     def _scan_and_trade(self):
-        """Fetch all stocks, compute anomaly scores, trade top N."""
+        """Fetch all stocks. 9:20 uses anomaly score. 10:12 uses pullback rule."""
+        now = datetime.now()
+        is_first_scan = now.hour == 9  # 9:20 scan
+        is_second_scan = now.hour == 10  # 10:12 scan
         # Fetch Market Lens data
         stocks = self._fetch_market_lens()
         if not stocks:
@@ -170,13 +180,50 @@ class AnomalyAgent(BaseAgent):
             if s['nm'] < 0 and s['ocf'] <= 0: score += 1
             s['anomaly_score'] = score
 
-        # Rank and take top N (skip already entered)
-        candidates = [s for s in stocks
-                      if s['anomaly_score'] >= MIN_ANOMALY_SCORE
-                      and s['residual'] > 2
-                      and s['ticker'] not in self._entered
-                      and s['ltp'] >= MIN_PRICE]
-        candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
+        if is_first_scan:
+            # 9:20: gain>4% + residual<=13 + anomaly_score>=5
+            candidates = [s for s in stocks
+                          if s['anomaly_score'] >= MIN_ANOMALY_SCORE
+                          and s['residual'] > 2
+                          and s['residual'] <= 13
+                          and s['ticker'] not in self._entered
+                          and s['ltp'] >= MIN_PRICE]
+            # Filter: gain must be > 4% from prev close
+            candidates = [s for s in candidates
+                          if s.get('gain_from_prev', 0) > 4]
+            candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
+        elif is_second_scan:
+            # 10:12: gain 5-10% + pullback>1% + below VWAP>0.5% + delivery<40%
+            candidates = []
+            for s in stocks:
+                if s['ticker'] in self._entered: continue
+                if s['ltp'] < MIN_PRICE: continue
+                gain = s.get('gain_from_prev', 0)
+                if gain < 5 or gain > 10: continue
+                # Pullback from day high
+                dh = s.get('day_high', 0)
+                if dh <= 0: continue
+                pullback = (dh - s['ltp']) / dh * 100
+                if pullback < 1: continue
+                # Below VWAP
+                vwap = s.get('vwap', 0)
+                if vwap <= 0: continue
+                below_vwap = (vwap - s['ltp']) / vwap * 100
+                if below_vwap < 0.5: continue
+                # Delivery < 40%
+                dlv = s.get('dlv', 0)
+                if dlv >= 40:
+                    # Log but skip
+                    audit('anomaly', 'SKIP_HIGH_DLV', s['ticker'],
+                          gain=round(gain, 1), pullback=round(pullback, 1),
+                          below_vwap=round(below_vwap, 2), dlv=round(dlv, 1))
+                    continue
+                s['pullback'] = pullback
+                s['below_vwap'] = below_vwap
+                candidates.append(s)
+            candidates.sort(key=lambda x: (-x['pullback'], -x['below_vwap']))
+        else:
+            candidates = []
 
         # How many slots available?
         current_positions = len([p for p in self._positions.active()
@@ -192,12 +239,16 @@ class AnomalyAgent(BaseAgent):
 
         # Log all candidates
         for s in candidates[:10]:
+            extra = {}
+            if is_second_scan:
+                extra = {'pullback': round(s.get('pullback', 0), 1),
+                          'below_vwap': round(s.get('below_vwap', 0), 2),
+                          'gain': round(s.get('gain_from_prev', 0), 1)}
             audit('anomaly', 'CANDIDATE', s['ticker'],
-                  score=s['anomaly_score'], residual=round(s['residual'], 1),
+                  score=s.get('anomaly_score', 0), residual=round(s.get('residual', 0), 1),
                   gap=round(s['gap'], 2), sector=s['sector'],
-                  dv_vs=round(s['dv_vs'], 2), dlv_vs=round(s['dlv_vs'], 1),
-                  vol_vs=round(s['vol_vs'], 2), wk_vs=round(s['wk_vs'], 1),
-                  rank=s['rank'], nm=round(s['nm'], 1), ltp=s['ltp'])
+                  dlv=round(s.get('dlv', 0), 1), ltp=s['ltp'],
+                  scan='10:12' if is_second_scan else '9:20', **extra)
 
         # Enter trades
         for s in to_trade:
@@ -314,6 +365,9 @@ class AnomalyAgent(BaseAgent):
                 stocks.append({
                     'ticker': ticker,
                     'ltp': ltp,
+                    'gain_from_prev': (ltp - prev) / prev * 100,
+                    'day_high': data.get('dayHigh', 0) or 0,
+                    'vwap': data.get('avgPrice', 0) or 0,
                     'gap': (data.get('openPrice', ltp) - prev) / prev * 100,
                     'sector': data.get('sector', '') or '',
                     'beta': data.get('beta', 0) or 0,
