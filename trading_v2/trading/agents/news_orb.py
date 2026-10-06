@@ -25,7 +25,6 @@ from trading.logger import audit
 
 class NewsOrbAgent(BaseAgent):
     name = 'news_orb'
-    PAPER_MODE = True  # Log signals but don't place orders
 
     def run(self):
         """Loop daily: wait for 9:05 -> scan -> analyze -> OR -> filter -> trade."""
@@ -203,11 +202,6 @@ class NewsOrbAgent(BaseAgent):
                 'qty': qty, 'trade_id': trade_id, 'sl_pct': sl_pct,
                 'projection': t['projection'],
             })
-            if self.PAPER_MODE:
-                self._log.info(f'PAPER: would watch {sym} {call} @ {entry_price:.1f}')
-                audit('news_orb', 'PAPER_SIGNAL', sym, side=call, entry=entry_price, qty=qty)
-                self._fm.release(trade_id, pnl=0)
-                continue
             self._log.info(f'WATCHING {sym} {call} for breakout @ {entry_price:.1f}')
             audit('news_orb', 'WATCHING_BREAKOUT', sym, side=call,
                   entry=entry_price, qty=qty)
