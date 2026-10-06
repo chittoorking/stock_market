@@ -307,7 +307,7 @@ class AnomalyAgent(BaseAgent):
                 book = self._broker._api.get_order_book() or []
                 for o in book:
                     if o.get('id') == order_id or o.get('order_id') == order_id:
-                        actual_qty = int(o.get('traded_qty', qty) or qty)
+                        actual_qty = int(o.get('traded_qty', 0) or 0)
                         tp = o.get('traded_price', 0)
                         if tp and float(tp) > 0:
                             actual_price = float(tp)
