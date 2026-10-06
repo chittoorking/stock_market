@@ -83,6 +83,38 @@ class Broker:
         audit('broker', 'FNO_SELL_OK', sym, order_id=oid)
         return oid
 
+    def sell_smart(self, sym: str, qty: int, limit_price: float, sl_trigger: float, sl_limit: float) -> dict:
+        """Place smart SELL order with SL. Returns {parent: oid, child: oid}."""
+        self._check_sym(sym)
+        audit('broker', 'SMART_SELL_SUBMIT', sym, qty=qty, price=limit_price, sl=sl_trigger)
+        result = self._api.place_smart_order(sym, qty, 'SELL', limit_price,
+                                              sl_trigger=sl_trigger, sl_limit=sl_limit)
+        if not result:
+            audit('broker', 'SMART_SELL_FAILED', sym, qty=qty)
+            raise BrokerError(f'Smart SELL {sym}: returned None')
+        audit('broker', 'SMART_SELL_OK', sym, qty=qty, parent=result.get('parent',''), child=result.get('child',''))
+        return result
+
+    def buy_smart(self, sym: str, qty: int, limit_price: float, sl_trigger: float, sl_limit: float) -> dict:
+        """Place smart BUY order with SL. Returns {parent: oid, child: oid}."""
+        self._check_sym(sym)
+        audit('broker', 'SMART_BUY_SUBMIT', sym, qty=qty, price=limit_price, sl=sl_trigger)
+        result = self._api.place_smart_order(sym, qty, 'BUY', limit_price,
+                                              sl_trigger=sl_trigger, sl_limit=sl_limit)
+        if not result:
+            audit('broker', 'SMART_BUY_FAILED', sym, qty=qty)
+            raise BrokerError(f'Smart BUY {sym}: returned None')
+        audit('broker', 'SMART_BUY_OK', sym, qty=qty, parent=result.get('parent',''), child=result.get('child',''))
+        return result
+
+    def cancel_smart(self, order_id: str):
+        """Cancel smart order (SL leg)."""
+        try:
+            self._api.cancel_smart_order(order_id)
+            audit('broker', 'SMART_CANCEL_OK', order_id=order_id)
+        except Exception as e:
+            audit('broker', 'SMART_CANCEL_FAIL', order_id=order_id, error=str(e))
+
     # ── Price ──
 
     # Index scrip codes for LTP

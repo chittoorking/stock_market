@@ -60,6 +60,14 @@ class PositionManager:
         if exit_price <= 0:
             exit_price = self._broker.ltp_safe(pos.symbol, pos.entry_price)
 
+        # Cancel exchange SL (smart order child) before exit
+        if pos.fno_sec_id and pos.strategy == 'anomaly':
+            try:
+                self._broker.cancel_smart(pos.fno_sec_id)
+                log.info(f'Cancelled SL order {pos.fno_sec_id} for {pos.symbol}')
+            except Exception as e:
+                log.warning(f'Failed to cancel SL {pos.fno_sec_id}: {e}')
+
         # Sell FIRST — don't remove position until confirmed
         sell_ok = True
         if not skip_sell:

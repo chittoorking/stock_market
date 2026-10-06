@@ -204,24 +204,23 @@ class AnomalyAgent(BaseAgent):
             self._enter_short(s)
 
     def _enter_short(self, s):
-        """Enter SHORT position on anomalous stock."""
+        """Enter SHORT via smart order (entry + SL on exchange).
+        Trail and exit handled by our monitor."""
         sym = s['ticker']
         ltp = s['ltp']
 
-        # Check if broker has this symbol
         if not self._broker.has_symbol(sym):
             self._log.warning(f'{sym}: not in broker scrips')
             return
 
-        # Get live LTP
         live_ltp = self._broker.ltp_safe(sym)
         if live_ltp <= 0:
             live_ltp = ltp
 
-        # Position sizing: equal weight across MAX_TRADES
+        # Position sizing
         available = self._fm.available
         per_trade = available / max(1, MAX_TRADES - len(self._entered))
-        qty = int(per_trade * 5 / live_ltp)  # 5x leverage
+        qty = int(per_trade * 5 / live_ltp)
         if qty < 1:
             self._log.info(f'{sym}: qty=0, insufficient funds')
             return
@@ -232,31 +231,42 @@ class AnomalyAgent(BaseAgent):
             self._log.info(f'{sym}: FM rejected (need Rs {margin:,.0f})')
             return
 
-        # Place SELL (SHORT) order
+        # Smart order: entry SELL at LTP + SL at 2% above
+        sl_trigger = round(live_ltp * (1 + SL_PCT / 100), 2)
+        sl_limit = round(sl_trigger * 1.001, 2)  # SL limit slightly above trigger
+
         try:
-            order_id = self._broker.sell(sym, qty)
-            sl_price = live_ltp * (1 + SL_PCT / 100)
+            result = self._broker.sell_smart(sym, qty, live_ltp, sl_trigger, sl_limit)
+            parent_id = result.get('parent', '')
+            child_id = result.get('child', '')
 
             self._positions.open(
                 symbol=sym, side=Side.SELL, qty=qty,
-                entry_price=live_ltp, order_id=order_id,
-                strategy=self.name, sl=sl_price,
+                entry_price=live_ltp, order_id=parent_id,
+                strategy=self.name, sl=sl_trigger,
                 trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                 trade_id=trade_id,
             )
+            # Store child (SL) order ID for cancellation when trail exits
+            pos = self._positions.find_by_symbol(sym)
+            if pos:
+                pos.fno_sec_id = child_id  # reuse fno_sec_id field to store SL order ID
+
             self._entered.add(sym)
 
             audit('anomaly', 'ENTRY', sym,
                   side='SHORT', qty=qty, entry=round(live_ltp, 2),
-                  sl=round(sl_price, 2), margin=round(margin, 0),
+                  sl=round(sl_trigger, 2), margin=round(margin, 0),
                   score=s['anomaly_score'], residual=round(s['residual'], 1),
-                  sector=s['sector'], gap=round(s['gap'], 2))
+                  sector=s['sector'], gap=round(s['gap'], 2),
+                  parent_oid=parent_id, child_oid=child_id)
 
-            self._log.info(f'SHORT {sym} qty={qty} @ {live_ltp:.1f} '
-                          f'SL={sl_price:.1f} score={s["anomaly_score"]} '
-                          f'residual={s["residual"]:+.1f}')
+            self._log.info(f'SMART SHORT {sym} qty={qty} @ {live_ltp:.1f} '
+                          f'SL={sl_trigger:.1f} score={s["anomaly_score"]} '
+                          f'residual={s["residual"]:+.1f} '
+                          f'parent={parent_id} child={child_id}')
         except Exception as e:
-            self._log.error(f'{sym}: order failed: {e}')
+            self._log.error(f'{sym}: smart order failed: {e}')
             self._fm.release(trade_id, pnl=0)
 
     def _fetch_market_lens(self):
