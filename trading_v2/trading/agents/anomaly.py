@@ -284,21 +284,30 @@ class AnomalyAgent(BaseAgent):
             return
 
         try:
-            # LIMIT IOC at 0.1% below LTP — fills instantly for shorts
-            # If doesn't fill = stock too strong = dodged a bullet
+            # LIMIT at 0.1% below LTP — DAY validity (IOC not supported for equity)
             entry_price = round(live_ltp * 0.999, 2)
             order_id = self._broker.sell(sym, qty, price=entry_price,
-                                         order_type='LIMIT', product='INTRADAY',
-                                         validity='IOC')
+                                         order_type='LIMIT', product='INTRADAY')
 
-            # Check actual fill after 2 seconds
-            import time; time.sleep(2)
+            # Wait 5s, check fill, cancel unfilled remainder
+            import time; time.sleep(5)
             filled, fill_price = self._broker.order_filled(order_id)
 
             if not filled:
-                self._log.info(f'{sym}: IOC no fill — too strong to short')
+                # Cancel the unfilled order
+                try:
+                    self._broker.cancel(order_id)
+                except Exception:
+                    pass
+                self._log.info(f'{sym}: no fill after 5s — cancelled')
                 self._fm.release(trade_id, pnl=0)
                 return
+
+            # Cancel any unfilled remainder
+            try:
+                self._broker.cancel(order_id)
+            except Exception:
+                pass
 
             # Get actual filled qty from order book
             actual_qty = qty  # default

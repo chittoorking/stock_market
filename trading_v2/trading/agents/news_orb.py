@@ -237,13 +237,9 @@ class NewsOrbAgent(BaseAgent):
                     self._log.info(f'BREAKOUT {w["sym"]} {w["call"]} LTP={ltp:.1f} >= {w["entry_price"]:.1f}')
                     try:
                         if w['call'] == 'BUY':
-                            buy_price = round(ltp * 1.001, 2)
-                            order_id = self._broker.buy(w['sym'], w['qty'], price=buy_price,
-                                                         order_type='LIMIT', validity='IOC')
+                            order_id = self._broker.buy(w['sym'], w['qty'])
                         else:
-                            sell_price = round(ltp * 0.999, 2)
-                            order_id = self._broker.sell(w['sym'], w['qty'], price=sell_price,
-                                                          order_type='LIMIT', validity='IOC')
+                            order_id = self._broker.sell(w['sym'], w['qty'])
 
                         pending.append({
                             'sym': w['sym'], 'call': w['call'],

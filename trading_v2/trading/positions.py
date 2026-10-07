@@ -69,20 +69,20 @@ class PositionManager:
                         if pos.fno_sec_id:
                             oid = self._broker.sell_fno(pos.symbol, pos.qty, pos.fno_sec_id)
                         else:
-                            # IOC exit — fill or cancel, no zombie orders
+                            # LIMIT at 0.5% below LTP for SELL exit
                             ltp = self._broker.ltp_safe(pos.symbol)
-                            exit_price = round(ltp * 0.995, 2) if ltp > 0 else 0  # 0.5% below for SELL
+                            exit_price = round(ltp * 0.995, 2) if ltp > 0 else 0
                             oid = self._broker.sell(pos.symbol, pos.qty, price=exit_price,
-                                                     order_type='LIMIT', validity='IOC')
+                                                     order_type='LIMIT')
                     else:
                         if pos.fno_sec_id:
                             oid = self._broker.buy_fno(pos.symbol, pos.qty, pos.fno_sec_id)
                         else:
-                            # IOC exit — fill or cancel, no zombie orders
+                            # LIMIT at 0.5% above LTP for BUY exit
                             ltp = self._broker.ltp_safe(pos.symbol)
-                            exit_price = round(ltp * 1.005, 2) if ltp > 0 else 0  # 0.5% above for BUY
+                            exit_price = round(ltp * 1.005, 2) if ltp > 0 else 0
                             oid = self._broker.buy(pos.symbol, pos.qty, price=exit_price,
-                                                    order_type='LIMIT', validity='IOC')
+                                                    order_type='LIMIT')
                     if oid:
                         log.info(f'EXIT ORDER OK: {pos.symbol} attempt={attempt+1} oid={oid}')
                         break
