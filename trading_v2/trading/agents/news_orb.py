@@ -108,7 +108,7 @@ class NewsOrbAgent(BaseAgent):
                     baseline[sym] = {
                         'ltp': ml.get('lastTradedPrice', 0),
                         'dlv': ml.get('deliveryPercentage', 0),
-                        'direction': t.get('direction', 'BUY'),
+                        'direction': t.get('call', t.get('direction', 'BUY')),
                         'trade': t,
                     }
                     self._log.info(f'BASELINE {sym}: LTP={baseline[sym]["ltp"]:.1f} Dlv={baseline[sym]["dlv"]:.0f}%')
@@ -151,12 +151,12 @@ class NewsOrbAgent(BaseAgent):
                 price_chg = (ltp_now - ltp_base) / ltp_base * 100
                 dlv_chg = dlv_now - dlv_base
 
-                # Check confirmation
+                # Check confirmation (minimum thresholds to avoid noise)
                 if direction == 'BUY':
-                    price_confirms = price_chg > 0
+                    price_confirms = price_chg > 0.5  # at least 0.5% move
                 else:
-                    price_confirms = price_chg < 0
-                dlv_confirms = dlv_chg > 0
+                    price_confirms = price_chg < -0.5
+                dlv_confirms = dlv_chg > 2  # at least 2pp delivery increase
 
                 audit('news_orb', 'CONFIRMATION_CHECK', sym,
                       direction=direction, price_chg=round(price_chg, 2),
@@ -326,155 +326,3 @@ class NewsOrbAgent(BaseAgent):
 
         return True
 
-    def _place_limit_orders(self, filtered: list) -> list:
-        """Watch LTP, place MARKET order only when breakout confirms.
-        BUY: wait for LTP >= ORB high + buffer, then buy at market.
-        SELL: wait for LTP <= ORB low - buffer, then sell at market.
-        """
-        watchlist = []
-        for t in filtered:
-            sym = t['nse_symbol']
-            entry_price = t['entry_price']
-            call = t['call']
-
-            sl_pct = orb.get_atr_sl(sym)
-            if math.isnan(sl_pct) or sl_pct <= 0:
-                sl_pct = 3.0
-
-            sl_price = entry_price * (1 - sl_pct / 100)
-            qty = self._fm.calc_equity_qty(entry_price, sl_price)
-            margin = qty * entry_price / 5
-            ok, amount, trade_id = self._fm.request(self.name, sym, margin)
-            if not ok:
-                self._log.info(f'FM rejected: {sym} (need Rs {margin:,.0f})')
-                continue
-
-            watchlist.append({
-                'sym': sym, 'call': call, 'entry_price': entry_price,
-                'qty': qty, 'trade_id': trade_id, 'sl_pct': sl_pct,
-                'projection': t['projection'],
-            })
-            self._log.info(f'WATCHING {sym} {call} for breakout @ {entry_price:.1f}')
-            audit('news_orb', 'WATCHING_BREAKOUT', sym, side=call,
-                  entry=entry_price, qty=qty)
-
-        if not watchlist:
-            return []
-
-        # Poll LTP every 10s, place MARKET order when breakout confirms
-        pending = []
-        remaining = list(watchlist)
-
-        while remaining:
-            now = datetime.now()
-            if now.hour > 14 or (now.hour == 14 and now.minute >= 45):
-                self._log.info(f'Deadline: {len(remaining)} breakouts not triggered')
-                for w in remaining:
-                    self._fm.release(w['trade_id'], pnl=0)
-                    audit('news_orb', 'BREAKOUT_TIMEOUT', w['sym'])
-                break
-
-            for w in remaining[:]:
-                ltp = self._broker.ltp_safe(w['sym'])
-                if ltp <= 0:
-                    continue
-
-                triggered = False
-                if w['call'] == 'BUY' and ltp >= w['entry_price']:
-                    triggered = True
-                elif w['call'] == 'SELL' and ltp <= w['entry_price']:
-                    triggered = True
-
-                if triggered:
-                    self._log.info(f'BREAKOUT {w["sym"]} {w["call"]} LTP={ltp:.1f} >= {w["entry_price"]:.1f}')
-                    try:
-                        if w['call'] == 'BUY':
-                            order_id = self._broker.buy(w['sym'], w['qty'])
-                        else:
-                            order_id = self._broker.sell(w['sym'], w['qty'])
-
-                        pending.append({
-                            'sym': w['sym'], 'call': w['call'],
-                            'entry_price': ltp, 'qty': w['qty'],
-                            'order_id': order_id, 'trade_id': w['trade_id'],
-                            'sl_pct': w['sl_pct'], 'projection': w['projection'],
-                        })
-                        # Log entry with all available data
-                        entry_data = {'side': w['call'], 'ltp': ltp, 'qty': w['qty'],
-                                      'order_id': order_id, 'entry_price': w['entry_price'],
-                                      'sl_pct': w['sl_pct'], 'projection': w['projection']}
-                        # Add VWAP + delivery from ML enricher
-                        try:
-                            from trading.services.ml_enricher import get_ml_snapshot, _get_broker_data
-                            ml = get_ml_snapshot(w['sym'])
-                            if ml:
-                                entry_data['vwap'] = ml.get('avgPrice', 0)
-                                entry_data['delivery_pct'] = ml.get('deliveryPercentage', 0)
-                                entry_data['volume'] = ml.get('volume', 0)
-                                entry_data['day_volatility'] = ml.get('dayVolatility', 0)
-                                entry_data['pe'] = ml.get('peRatio', 0)
-                                entry_data['market_cap'] = ml.get('marketCap', 0)
-                                entry_data['one_week_return'] = ml.get('oneWeekReturn', 0)
-                                entry_data['promoter_holding'] = ml.get('promoterHolding', 0)
-                                entry_data['ocf'] = ml.get('operatingCashFlow', 0)
-                            bd = _get_broker_data(w['sym'])
-                            if bd:
-                                entry_data['depth_buy_pct'] = bd.get('depth_buy_pct', 0)
-                                entry_data['depth_total_buy'] = bd.get('depth_total_buy', 0)
-                                entry_data['depth_total_sell'] = bd.get('depth_total_sell', 0)
-                                entry_data['spread_pct'] = bd.get('spread_pct', 0)
-                        except Exception:
-                            pass
-                        # Add pre-open data if available
-                        try:
-                            import json
-                            from pathlib import Path
-                            preopen_file = Path(__file__).parent.parent.parent.parent / 'live' / 'vwap_logs' / f'preopen_{datetime.now().strftime("%Y%m%d")}.jsonl'
-                            if preopen_file.exists():
-                                with open(preopen_file) as pf:
-                                    for line in pf:
-                                        po = json.loads(line)
-                                        if po.get('symbol') == w['sym'] and po.get('_type') == 'preopen':
-                                            entry_data['preopen_buy_qty'] = po.get('total_buy_qty', 0)
-                                            entry_data['preopen_sell_qty'] = po.get('total_sell_qty', 0)
-                                            entry_data['preopen_iep'] = po.get('iep', 0)
-                                            break
-                        except Exception:
-                            pass
-                        audit('news_orb', 'BREAKOUT_ENTRY', w['sym'], **entry_data)
-                    except Exception as e:
-                        self._log.error(f'Breakout order failed {w["sym"]}: {e}')
-                        self._fm.release(w['trade_id'], pnl=0)
-                    remaining.remove(w)
-
-            if remaining:
-                time.sleep(10)
-
-        self._log.info(f'{len(pending)} breakout orders filled')
-        return pending
-
-    def _process_fills(self, pending: list):
-        """Create positions for breakout market orders (already filled)."""
-        for order_info in pending:
-            sym = order_info['sym']
-            call = order_info['call']
-            actual = order_info['entry_price']
-            sl_pct = order_info['sl_pct']
-
-            if math.isnan(sl_pct) or sl_pct <= 0:
-                sl_pct = 3.0
-            if call == 'BUY':
-                sl_price = actual * (1 - sl_pct / 100)
-            else:
-                sl_price = actual * (1 + sl_pct / 100)
-
-            side = Side.BUY if call == 'BUY' else Side.SELL
-
-            self._positions.open(
-                symbol=sym, side=side, qty=order_info['qty'],
-                entry_price=actual, order_id=order_info['order_id'],
-                strategy=self.name, sl=sl_price,
-                trail_activate_pct=1.0, trail_pct=0.5,
-                trade_id=order_info['trade_id'],
-            )
-            self._log.info(f'POSITION: {sym} {call} @ {actual:.1f} SL={sl_price:.1f}')
