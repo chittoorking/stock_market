@@ -61,6 +61,22 @@ class PositionManager:
         if exit_price <= 0:
             exit_price = self._broker.ltp_safe(pos.symbol, pos.entry_price, fno_sec_id=getattr(pos, "fno_sec_id", None))
 
+        # Verify position still exists at broker before sending exit order
+        # Prevents creating new position if user already closed manually
+        if not skip_sell:
+            try:
+                from live.indmoney_client import get_positions
+                broker_pos = get_positions() or []
+                has_position = any(
+                    p.get('symbol', '') == pos.symbol and abs(p.get('net_qty', 0)) > 0
+                    for p in broker_pos
+                )
+                if not has_position:
+                    log.warning(f'{pos.symbol}: not found at broker — already closed manually?')
+                    skip_sell = True
+            except Exception as e:
+                log.warning(f'{pos.symbol}: broker position check failed ({e}), proceeding with exit')
+
         # Sell FIRST — don't remove position until confirmed
         sell_ok = True
         if not skip_sell:
