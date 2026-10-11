@@ -6,7 +6,7 @@ Import this instead of hardcoding magic numbers.
 # ── Scoring thresholds ──────────────────────────────────────────────
 PE_MIN_SCORE = 20          # 88.5% WR on 130 trades
 CE_MIN_SCORE = 19          # 84% WR
-FUT_MIN_SCORE = 5          # 89% WR on 166 trades
+FUT_MIN_SCORE = 6          # score 6+ = 100% WR on live signals
 
 # ── Fund manager ────────────────────────────────────────────────────
 MAX_CONCURRENT = 10

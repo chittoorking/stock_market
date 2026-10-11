@@ -148,8 +148,25 @@ class Broker:
             raise BrokerError(f'No LTP: {sym}')
         return float(p)
 
-    def ltp_safe(self, sym: str, default: float = 0) -> float:
+    def ltp_fno(self, sec_id: str) -> float:
+        """Get LTP for FnO instrument by security ID."""
+        import requests
+        h = {'Authorization': self._api.get_token()}
+        r = requests.get(f'https://api.indstocks.com/market/quotes/ltp?scrip-codes={sec_id}',
+                         headers=h, timeout=10, verify=False)
+        if r.status_code == 200:
+            val = r.json().get('data', {}).get(str(sec_id), {})
+            p = val.get('live_price', 0)
+            if p and float(p) > 0:
+                return float(p)
+        return 0
+
+    def ltp_safe(self, sym: str, default: float = 0, fno_sec_id: str = None) -> float:
         try:
+            if fno_sec_id:
+                p = self.ltp_fno(fno_sec_id)
+                if p > 0:
+                    return p
             return self.ltp(sym)
         except BrokerError:
             return default
@@ -204,7 +221,7 @@ class Broker:
         """Check via order book. Returns (filled, traded_price)."""
         book = self._api.get_order_book() or []
         for o in book:
-            if o.get('id') == order_id:
+            if o.get('id') == order_id or o.get('order_id') == order_id:
                 status = o.get('status', '').upper()
                 traded_qty = int(o.get('traded_qty', 0) or 0)
                 # Check multiple fill indicators

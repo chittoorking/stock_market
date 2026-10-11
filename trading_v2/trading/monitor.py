@@ -110,6 +110,9 @@ class Monitor:
         for pos in active:
             try:
                 price = float(prices.get(pos.symbol, 0))
+                # FnO positions: batch LTP won't have them, use sec_id lookup
+                if price <= 0 and getattr(pos, 'fno_sec_id', ''):
+                    price = self._broker.ltp_fno(pos.fno_sec_id)
                 if price <= 0:
                     continue
                 self._check(pos, price)

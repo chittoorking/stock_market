@@ -54,11 +54,12 @@ class PositionManager:
         """Close position. Sells first, then removes. Never lose track."""
         with self._lock:
             pos = self._positions.get(pos_id)
-        if not pos or pos.closed:
-            return None
+            if not pos or pos.closed:
+                return None
+            pos.closed = True  # claim this close — prevent double-sell race
 
         if exit_price <= 0:
-            exit_price = self._broker.ltp_safe(pos.symbol, pos.entry_price)
+            exit_price = self._broker.ltp_safe(pos.symbol, pos.entry_price, fno_sec_id=getattr(pos, "fno_sec_id", None))
 
         # Sell FIRST — don't remove position until confirmed
         sell_ok = True
@@ -106,6 +107,23 @@ class PositionManager:
                         timeout=5)
                 except:
                     pass
+
+        # Get actual fill price from order book
+        if sell_ok and not skip_sell:
+            try:
+                import time as _t; _t.sleep(1)
+                book = self._broker._api.get_order_book() or []
+                for _o in book:
+                    _oid = str(_o.get('id', ''))
+                    _oid2 = str(_o.get('order_id', ''))
+                    if _oid == str(oid) or _oid2 == str(oid):
+                        _tp = _o.get('traded_price', 0)
+                        if _tp and float(_tp) > 0:
+                            exit_price = float(_tp)
+                            log.info(f'EXIT FILL PRICE: {pos.symbol} @ {exit_price}')
+                        break
+            except Exception:
+                pass
 
         # NOW remove from tracking (whether sell worked or not — avoid infinite retry loop)
         with self._lock:

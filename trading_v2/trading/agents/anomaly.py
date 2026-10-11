@@ -1,15 +1,17 @@
-"""Anomaly Agent — two entry windows for SHORT anomalies.
+"""Anomaly Agent - two entry windows for SHORT anomalies.
 
 Entry 1 (9:20):
   gain > 4% from prev close + residual <= 13 + anomaly score >= 5
   Catches gap anomalies before market processes them.
-  4 days, 20 trades, 20 wins.
+  5 days, 22 trades, 22 wins.
+  + mcap < 1000 Cr + 1M return < 35%
+  Small caps with fake gaps revert.
 
 Entry 2 (10:12):
   gain 5-10% from prev close + pullback > 1% from day high +
   below VWAP > 0.5% + delivery < 40%
   Catches confirmed reversals after delivery data updates.
-  4 days, 14 trades, 13 wins (92%).
+  5 days, 6 trades, 6 wins (OCF<100 filter).
 
 Both: LIMIT IOC at LTP*0.999. Trail 1%/0.5%. SL 2%. EOD 3:10.
 
@@ -31,13 +33,18 @@ from collections import defaultdict
 from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import audit, get_logger
+from trading.services import price_tracker
 
 log = get_logger('anomaly')
 
-# Heartbeat scans — when to scan for anomalies
+# Heartbeat scans - when to scan for anomalies
 ENTRY_TIMES = [
     (9, 20),   # after ORB, first scan
-    (10, 12),  # delivery update — second scan
+    (10, 12),  # delivery update - second scan
+    (11, 12),  # late pullback - third scan
+    (12, 12),  # fourth scan
+    (13, 12),  # afternoon - paper mode
+    (14, 12),  # afternoon - paper mode
 ]
 
 MAX_TRADES = 5
@@ -85,6 +92,9 @@ class AnomalyAgent(BaseAgent):
             return
 
         self._entered.clear()
+        self._fm.reset_daily()
+        price_tracker.reset()
+        price_tracker.start()
         self._log.info('=== ANOMALY AGENT START ===')
 
         for entry_h, entry_m in ENTRY_TIMES:
@@ -95,7 +105,8 @@ class AnomalyAgent(BaseAgent):
                 self._log.info(f'Waiting {wait:.0f}s for {entry_h}:{entry_m:02d}')
                 time.sleep(wait)
             elif wait < -300:
-                # More than 5 min past — skip this heartbeat
+                # More than 5 min past - skip this heartbeat
+                self._log.info(f'SKIP {entry_h}:{entry_m:02d} (past by {-wait:.0f}s)')
                 continue
 
             self._log.info(f'=== HEARTBEAT {entry_h}:{entry_m:02d} ===')
@@ -111,7 +122,7 @@ class AnomalyAgent(BaseAgent):
         """Fetch all stocks. 9:20 uses anomaly score. 10:12 uses pullback rule."""
         now = datetime.now()
         is_first_scan = now.hour == 9  # 9:20 scan
-        is_second_scan = now.hour == 10  # 10:12 scan
+        is_second_scan = now.hour in (10, 11, 12, 13, 14)  # 10:12 and 11:12 scan
         # Fetch Market Lens data
         stocks = self._fetch_market_lens()
         if not stocks:
@@ -191,13 +202,25 @@ class AnomalyAgent(BaseAgent):
             # Filter: gain must be > 4% from prev close
             candidates = [s for s in candidates
                           if s.get('gain_from_prev', 0) > 4]
+            # Filter: small caps only + not momentum continuation
+            candidates = [s for s in candidates
+                          if s.get('mcap', 9999) < 1000
+                          and s.get('mo', 0) < 35]
+            # Circuit filter: skip if upper circuit < entry + 2.5% (SL can't fill before circuit)
+            candidates = [s for s in candidates
+                          if s.get('upper_circuit', 9999) > s['ltp'] * 1.025]
             candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
         elif is_second_scan:
-            # 10:12: gain 5-10% + pullback>1% + below VWAP>0.5% + delivery<40%
+            # 10:12: gain 5-10% + pullback>1% + below VWAP>0.5% + delivery<40% + OCF<100
             candidates = []
             for s in stocks:
                 if s['ticker'] in self._entered: continue
                 if s['ltp'] < MIN_PRICE: continue
+                # Only short weak fundamentals (OCF < 100)
+                if s.get("ocf", 0) >= 100:
+                    audit("anomaly", "SKIP_HIGH_OCF", s["ticker"],
+                          gain=round(s.get("gain_from_prev", 0), 1), ocf=round(s.get("ocf", 0)))
+                    continue
                 gain = s.get('gain_from_prev', 0)
                 if gain < 5 or gain > 10: continue
                 # Pullback from day high
@@ -220,6 +243,32 @@ class AnomalyAgent(BaseAgent):
                     continue
                 s['pullback'] = pullback
                 s['below_vwap'] = below_vwap
+                # Max bounce < 2.5% (gradual fade, not choppy)
+                mb = price_tracker.get_max_bounce(s['ticker'])
+                if mb >= 2.5:
+                    audit('anomaly', 'SKIP_CHOPPY', s['ticker'],
+                          gain=round(gain, 1), max_bounce=round(mb, 1))
+                    continue
+                # fr200 < 20% (not in strong uptrend)
+                dma200 = s.get('dma200', 0)
+                if dma200 > 0:
+                    fr200 = (s['ltp'] - dma200) / dma200 * 100
+                    if fr200 >= 20:
+                        audit('anomaly', 'SKIP_UPTREND', s['ticker'],
+                              gain=round(gain, 1), fr200=round(fr200, 1))
+                        continue
+                # 6M return < 50% (not a stock that doubled recently)
+                sixm = s.get('sixm', 0)
+                if sixm >= 50:
+                    audit('anomaly', 'SKIP_6M_MOMENTUM', s['ticker'],
+                          gain=round(gain, 1), sixm=round(sixm, 1))
+                    continue
+                # Circuit filter: skip if upper circuit < entry + 2.5%
+                uc = s.get('upper_circuit', 0)
+                if uc > 0 and uc < s['ltp'] * 1.025:
+                    audit('anomaly', 'SKIP_CIRCUIT', s['ticker'],
+                          gain=round(gain, 1), ltp=s['ltp'], upper_circuit=uc)
+                    continue
                 candidates.append(s)
             candidates.sort(key=lambda x: (-x['pullback'], -x['below_vwap']))
         else:
@@ -248,75 +297,128 @@ class AnomalyAgent(BaseAgent):
                   score=s.get('anomaly_score', 0), residual=round(s.get('residual', 0), 1),
                   gap=round(s['gap'], 2), sector=s['sector'],
                   dlv=round(s.get('dlv', 0), 1), ltp=s['ltp'],
-                  scan='10:12' if is_second_scan else '9:20', **extra)
+                  scan=f'{now.hour}:{now.minute:02d}', **extra)
 
-        # Enter trades
-        for s in to_trade:
-            self._enter_short(s)
-
-    def _enter_short(self, s):
-        """Enter SHORT via LIMIT IOC order.
-        Fills instantly at LTP-0.1%. Unfilled auto-cancelled.
-        SL + trail handled by monitor."""
-        sym = s['ticker']
-        ltp = s['ltp']
-
-        if not self._broker.has_symbol(sym):
-            self._log.warning(f'{sym}: not in broker scrips')
+        # Afternoon scans (1:12, 2:12) = paper mode only
+        if now.hour >= 13:
+            for s in to_trade:
+                audit('anomaly', 'PAPER_AFTERNOON', s['ticker'],
+                      score=s.get('anomaly_score', 0), residual=round(s.get('residual', 0), 1),
+                      gap=round(s['gap'], 2), sector=s['sector'],
+                      dlv=round(s.get('dlv', 0), 1), ltp=s['ltp'],
+                      scan=f'{now.hour}:{now.minute:02d}',
+                      pullback=round(s.get('pullback', 0), 1),
+                      below_vwap=round(s.get('below_vwap', 0), 2),
+                      gain=round(s.get('gain_from_prev', 0), 1))
+                self._log.info(f'PAPER AFTERNOON: {s["ticker"]} gain={s.get("gain_from_prev",0):+.1f}%')
             return
 
-        live_ltp = self._broker.ltp_safe(sym)
-        if live_ltp <= 0:
-            live_ltp = ltp
+        # Place all orders at once, then wait and check fills
+        self._place_and_fill(to_trade)
 
-        # Position sizing
-        available = self._fm.available
-        per_trade = available / max(1, MAX_TRADES - len(self._entered))
-        qty = int(per_trade * 5 / live_ltp)
-        if qty < 1:
-            self._log.info(f'{sym}: qty=0, insufficient funds')
-            return
+    def _place_and_fill(self, candidates):
+        """Place all SHORT orders at once, wait up to 5 min, check fills."""
+        import time
 
-        margin = qty * live_ltp / 5
-        ok, amount, trade_id = self._fm.request(self.name, sym, margin)
-        if not ok:
-            self._log.info(f'{sym}: FM rejected (need Rs {margin:,.0f})')
-            return
+        # Phase 1: Place all orders
+        pending = []
+        for s in candidates:
+            sym = s['ticker']
+            ltp = s['ltp']
 
-        try:
-            # LIMIT at 0.1% below LTP — DAY validity (IOC not supported for equity)
-            entry_price = round(live_ltp * 0.999, 2)
-            order_id = self._broker.sell(sym, qty, price=entry_price,
-                                         order_type='LIMIT', product='INTRADAY')
+            if not self._broker.has_symbol(sym):
+                self._log.warning(f'{sym}: not in broker scrips')
+                continue
 
-            # Wait 5s, check fill, cancel unfilled remainder
-            import time; time.sleep(5)
-            filled, fill_price = self._broker.order_filled(order_id)
+            live_ltp = self._broker.ltp_safe(sym)
+            if live_ltp <= 0:
+                live_ltp = ltp
 
-            if not filled:
-                # Cancel the unfilled order
-                try:
-                    self._broker.cancel(order_id)
-                except Exception:
-                    pass
-                self._log.info(f'{sym}: no fill after 5s — cancelled')
+            available = self._fm.available
+            current_active = len([p for p in self._positions.active()
+                                    if p.strategy == self.name])
+            per_trade = available / max(1, MAX_TRADES - current_active)
+            qty = int(per_trade * 5 / live_ltp)
+            if qty < 1:
+                self._log.info(f'{sym}: qty=0, insufficient funds')
+                continue
+
+            margin = qty * live_ltp / 5
+            ok, amount, trade_id = self._fm.request(self.name, sym, margin)
+            if not ok:
+                self._log.info(f'{sym}: FM rejected')
+                continue
+
+            try:
+                entry_price = round(live_ltp * 0.999, 2)
+                order_id = self._broker.sell(sym, qty, price=entry_price,
+                                             order_type='LIMIT', product='INTRADAY')
+                pending.append({
+                    'sym': sym, 'qty': qty, 'entry_price': entry_price,
+                    'order_id': order_id, 'trade_id': trade_id,
+                    'margin': margin, 'signal': s,
+                })
+                self._log.info(f'ORDER PLACED: SHORT {sym} qty={qty} @ {entry_price:.1f}')
+            except Exception as e:
+                self._log.error(f'{sym}: order failed: {e}')
                 self._fm.release(trade_id, pnl=0)
-                return
+
+        if not pending:
+            self._log.info('No orders to place')
+            return
+
+        self._log.info(f'Placed {len(pending)} orders, waiting up to 5 min...')
+
+        # Phase 2: Check every 30s for up to 5 min
+        for wait_round in range(10):
+            time.sleep(30)
+            all_done = True
+            for p in pending:
+                if p.get('done'):
+                    continue
+                filled, fill_price = self._broker.order_filled(p['order_id'])
+                if filled:
+                    p['done'] = True
+                    p['filled'] = True
+                    p['fill_price'] = fill_price
+                    self._log.info(f'{p["sym"]}: filled after {(wait_round+1)*30}s')
+                else:
+                    all_done = False
+            if all_done:
+                break
+
+        # Phase 3: Process results
+        for p in pending:
+            sym = p['sym']
+            s = p['signal']
+
+            if not p.get('filled'):
+                try:
+                    self._broker.cancel(p['order_id'])
+                    self._log.info(f'{sym}: order cancelled (no fill)')
+                except Exception as e:
+                    self._log.warning(f'{sym}: cancel failed: {e}')
+                self._log.info(f'{sym}: no fill after 5 min - released')
+                self._fm.release(p['trade_id'], pnl=0)
+                audit('anomaly', 'NO_FILL', sym, order_id=p['order_id'])
+                continue
 
             # Cancel any unfilled remainder
             try:
-                self._broker.cancel(order_id)
+                self._broker.cancel(p['order_id'])
             except Exception:
                 pass
 
-            # Get actual filled qty from order book
-            actual_qty = qty  # default
-            actual_price = fill_price if fill_price > 0 else entry_price
+            # Get actual filled qty
+            actual_qty = p['qty']
+            actual_price = p['fill_price'] if p['fill_price'] > 0 else p['entry_price']
             try:
                 book = self._broker._api.get_order_book() or []
                 for o in book:
-                    if o.get('id') == order_id or o.get('order_id') == order_id:
-                        actual_qty = int(o.get('traded_qty', 0) or 0)
+                    if o.get('id') == p['order_id'] or o.get('order_id') == p['order_id']:
+                        tq = int(o.get('traded_qty', 0) or 0)
+                        if tq > 0:
+                            actual_qty = tq
                         tp = o.get('traded_price', 0)
                         if tp and float(tp) > 0:
                             actual_price = float(tp)
@@ -326,24 +428,31 @@ class AnomalyAgent(BaseAgent):
 
             if actual_qty <= 0:
                 self._log.info(f'{sym}: filled qty=0')
-                self._fm.release(trade_id, pnl=0)
-                return
+                self._fm.release(p['trade_id'], pnl=0)
+                continue
 
-            # Release excess margin if partial fill
+            # Handle partial fill margin
+            trade_id = p['trade_id']
+            margin = p['margin']
             actual_margin = actual_qty * actual_price / 5
-            if actual_margin < margin * 0.9:  # more than 10% less
+            if actual_margin < margin * 0.9:
                 self._fm.release(trade_id, pnl=0)
                 ok2, _, trade_id = self._fm.request(self.name, sym, actual_margin)
                 if not ok2:
                     self._log.error(f'{sym}: FM re-request failed')
-                    return
-                self._log.info(f'{sym}: partial fill {actual_qty}/{qty}, margin Rs {margin:.0f} -> Rs {actual_margin:.0f}')
+                    try:
+                        self._broker.buy(sym, actual_qty, order_type='MARKET', product='INTRADAY')
+                        self._log.info(f'{sym}: closed orphaned partial fill {actual_qty} qty')
+                    except Exception:
+                        self._log.error(f'{sym}: ORPHANED {actual_qty} qty SHORT - close manually!')
+                    continue
+                self._log.info(f'{sym}: partial fill {actual_qty}/{p["qty"]}')
 
             sl_price = round(actual_price * (1 + SL_PCT / 100), 2)
 
             self._positions.open(
                 symbol=sym, side=Side.SELL, qty=actual_qty,
-                entry_price=actual_price, order_id=order_id,
+                entry_price=actual_price, order_id=p['order_id'],
                 strategy=self.name, sl=sl_price,
                 trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                 trade_id=trade_id,
@@ -355,14 +464,11 @@ class AnomalyAgent(BaseAgent):
                   sl=round(sl_price, 2), margin=round(margin, 0),
                   score=s['anomaly_score'], residual=round(s['residual'], 1),
                   sector=s['sector'], gap=round(s['gap'], 2),
-                  requested_qty=qty, order_id=order_id)
+                  requested_qty=p['qty'], order_id=p['order_id'])
 
-            self._log.info(f'SHORT {sym} filled={actual_qty}/{qty} @ {actual_price:.1f} '
+            self._log.info(f'SHORT {sym} filled={actual_qty}/{p["qty"]} @ {actual_price:.1f} '
                           f'SL={sl_price:.1f} score={s["anomaly_score"]} '
                           f'residual={s["residual"]:+.1f}')
-        except Exception as e:
-            self._log.error(f'{sym}: order failed: {e}')
-            self._fm.release(trade_id, pnl=0)
 
     def _fetch_market_lens(self):
         """Fetch all stocks from NSE Market Lens."""
@@ -378,8 +484,11 @@ class AnomalyAgent(BaseAgent):
             for ticker, data in mle._cache.items():
                 ltp = data.get('lastTradedPrice', 0)
                 prev = data.get('previousClose', 0)
+                op = data.get('openPrice', 0) or 0
                 if not ltp or ltp <= 0 or not prev or prev <= 0:
                     continue
+                if op <= 0:
+                    continue  # skip stocks that haven't opened yet
 
                 stocks.append({
                     'ticker': ticker,
@@ -387,7 +496,7 @@ class AnomalyAgent(BaseAgent):
                     'gain_from_prev': (ltp - prev) / prev * 100,
                     'day_high': data.get('dayHigh', 0) or 0,
                     'vwap': data.get('avgPrice', 0) or 0,
-                    'gap': (data.get('openPrice', ltp) - prev) / prev * 100,
+                    'gap': (op - prev) / prev * 100,
                     'sector': data.get('sector', '') or '',
                     'beta': data.get('beta', 0) or 0,
                     'dv': data.get('dayVolatility', 0) or 0,
@@ -396,6 +505,11 @@ class AnomalyAgent(BaseAgent):
                     'vol': data.get('volume', 0) or 0,
                     'wk': data.get('oneWeekReturn', 0) or 0,
                     'ocf': data.get('operatingCashFlow', 0) or 0,
+                    'dma200': data.get('dma200', 0) or 0,
+                    'sixm': data.get('sixMonthReturn', 0) or 0,
+                    'upper_circuit': data.get('priceBandHigher', 0) or 0,
+                    'mcap': (data.get('marketCap', 0) or 0) / 1e7,
+                    'mo': data.get('oneMonthReturn', 0) or 0,
                 })
             return stocks
         except Exception as e:

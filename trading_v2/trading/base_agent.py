@@ -112,8 +112,12 @@ class BaseAgent:
         clean = sym.replace(' 50', '').replace(' ', '').strip().upper()
         # Strip expiry suffix: NATURALGAS26SEPFUT → NATURALGAS
         import re
-        base = re.sub(r'\d{2}[A-Z]{3}FUT$', '', clean).rstrip('M') or clean
-        return self._LOT_SIZES.get(clean) or self._LOT_SIZES.get(base) or 1
+        base_with_m = re.sub(r'\d{2}[A-Z]{3}FUT$', '', clean)  # GOLDM26NOVFUT → GOLDM
+        base_without_m = base_with_m.rstrip('M') or clean         # GOLDM → GOLD
+        return (self._LOT_SIZES.get(clean)
+                or self._LOT_SIZES.get(base_with_m)
+                or self._LOT_SIZES.get(base_without_m)
+                or 1)
 
     def on_signal(self, signal) -> dict:
         """Override: handle incoming signal. Return result dict."""

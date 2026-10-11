@@ -113,7 +113,7 @@ class FundManager:
         with self._lock:
             self._daily_pnl = 0
             self._loss_hit = False
-            self._deployed.clear()
+            # Don't clear _deployed — other agents may have overnight positions
         try:
             import sys, os
             sys.path.insert(0, os.path.expanduser('~/news-trading'))

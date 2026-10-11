@@ -13,7 +13,7 @@ from trading.logger import audit
 from trading.services import multyfi_api, multyfi_scoring, symbol_resolver
 
 from trading.config import (PE_MIN_SCORE, CE_MIN_SCORE, FUT_MIN_SCORE,
-                           OPTIONS_SL_PCT, MCX_COMMODITIES)
+                           OPTIONS_SL_PCT, MCX_COMMODITIES, TG_TOKEN, TG_CHAT_ID)
 
 
 class MulOptions(BaseAgent):
@@ -91,7 +91,7 @@ class MulOptions(BaseAgent):
             return
 
         # Dedup
-        sig_key = f"{symbol}_{entry_date}_{opt_type}_{strike}"
+        sig_key = opt.get("_id", f"{symbol}_{entry_date}_{opt_type}_{strike}")
         if sig_key in self._seen:
             return
         self._seen.add(sig_key)
@@ -166,7 +166,7 @@ class MulOptions(BaseAgent):
         entry_date = fd.get('entryDate', signal.get('date', ''))
         strike = signal.get('strike', 0)
         clean_sym = sym.replace(' 50', '').replace(' ', '').strip().upper()
-        sig_key = f"{clean_sym}_{entry_date}_{opt_type}_{strike}"
+        sig_key = fd.get("_id", f"{clean_sym}_{entry_date}_{opt_type}_{strike}")
         if sig_key in self._seen:
             return
         self._seen.add(sig_key)
@@ -247,8 +247,8 @@ class MulOptions(BaseAgent):
             entry=entry_price,
             sl=sl,
             target=target,
-            trail_activate_pct=0,  # no trail — trust Multyfi exit
-            trail_pct=0,
+            trail_activate_pct=10,  # move SL to breakeven at 10% profit
+            trail_pct=10,  # trail 10% from peak = breakeven floor
             conviction=7,
             reason=f'multyfi equity {action}',
         )
@@ -282,6 +282,19 @@ class MulOptions(BaseAgent):
         self._log.info(f'{sym} futures score={score} (min={threshold})')
 
         if score < threshold:
+            return
+
+        # MCX commodities: send Telegram alert instead of broker order
+        if is_commodity:
+            try:
+                import requests as _req
+                msg = f'MULTYFI {action} {sym} @ {entry_price} SL={fut_sl} score={score}'
+                _req.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
+                          json={'chat_id': TG_CHAT_ID, 'text': msg}, timeout=5)
+                self._log.info(f'TG ALERT: {msg}')
+                audit('multyfi', 'COMMODITY_ALERT', sym, action=action, entry=entry_price, sl=fut_sl, score=score)
+            except Exception:
+                pass
             return
 
         # Resolve sec_id — ALWAYS use numeric sec_id from instrument master
@@ -322,7 +335,7 @@ class MulOptions(BaseAgent):
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
             entry=entry_price, sl=sl,
-            trail_activate_pct=0, trail_pct=0,
+            trail_activate_pct=10, trail_pct=10,  # breakeven floor at 10% profit
             conviction=min(score // 3, 10),
             reason=f'multyfi futures {action} score={score} x{lot_mult}',
             is_fno=True, fno_sec_id=sec_id, fno_lot_size=scaled_lot, fno_margin=margin_req,
@@ -388,7 +401,7 @@ class MulOptions(BaseAgent):
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
             entry=opt_premium, sl=sl_price,
-            trail_activate_pct=0, trail_pct=0,
+            trail_activate_pct=10, trail_pct=10,  # breakeven floor at 10% profit
             conviction=min(score // 3, 10),
             reason=f'multyfi {opt_type} {action} score={score} x{lot_mult}',
             is_fno=True, fno_sec_id=sec_id, fno_lot_size=scaled_lot,
@@ -409,6 +422,13 @@ class MulOptions(BaseAgent):
             symbol = doc.get('stockSymbol', base)
             opt_type = doc.get('optionType', '')
             strike = doc.get('strike', 0)
+            # Extract strike from instrument if missing (e.g. NFO:NIFTY26O1322700PE -> 22700)
+            if not strike:
+                inst = doc.get('instrument', doc.get('stockSymbol', ''))
+                import re as _re
+                m = _re.search(r'(\d{4,6})(CE|PE)', str(inst))
+                if m:
+                    strike = int(m.group(1))
             entry_price = doc.get('entryPrice', 0)
 
             text = (stream.get('message', '') + ' ' + stream.get('title', '')).upper()
