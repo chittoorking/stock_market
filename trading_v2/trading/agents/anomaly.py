@@ -198,7 +198,7 @@ class AnomalyAgent(BaseAgent):
                           if s['anomaly_score'] >= MIN_ANOMALY_SCORE
                           and s['residual'] > 2
                           and s['residual'] <= 13
-                          and s['ticker'] not in self._entered
+                          and not self._positions.find_by_symbol(s['ticker'])
                           and s['ltp'] >= MIN_PRICE]
             # Filter: gain must be > 4% from prev close
             candidates = [s for s in candidates
@@ -215,7 +215,7 @@ class AnomalyAgent(BaseAgent):
             # 10:12: gain 5-10% + pullback>1% + below VWAP>0.5% + delivery<40% + OCF<100
             candidates = []
             for s in stocks:
-                if s['ticker'] in self._entered: continue
+                if self._positions.find_by_symbol(s['ticker']): continue
                 if s['ltp'] < MIN_PRICE: continue
                 # Only short weak fundamentals (OCF < 100)
                 if s.get("ocf", 0) >= 100:
