@@ -72,7 +72,10 @@ class PositionManager:
                     for p in broker_pos
                 )
                 if not has_position:
-                    log.warning(f'{pos.symbol}: not found at broker — already closed manually?')
+                    log.warning(f'{pos.symbol}: not found at broker — closed manually')
+                    audit('positions', 'MANUAL_BROKER_CLOSE', pos.symbol,
+                          pos_id=pos_id, entry=pos.entry_price,
+                          ltp=exit_price, strategy=pos.strategy)
                     skip_sell = True
             except Exception as e:
                 log.warning(f'{pos.symbol}: broker position check failed ({e}), proceeding with exit')
