@@ -61,7 +61,7 @@ class AnomalyAgent(BaseAgent):
 
     def __init__(self, broker, positions, fund_manager, monitor):
         super().__init__(broker, positions, fund_manager, monitor)
-        self._entered = set()  # tickers already entered today
+        self._entered = set()  # tracks all tickers entered today (for re-entry logging)
         self._ml_session = None
         self._ml_action = None
 
@@ -460,7 +460,8 @@ class AnomalyAgent(BaseAgent):
             )
             self._entered.add(sym)
 
-            audit('anomaly', 'ENTRY', sym,
+            is_reentry = sym in self._entered
+            audit('anomaly', 'RE_ENTRY' if is_reentry else 'ENTRY', sym,
                   side='SHORT', qty=actual_qty, entry=round(actual_price, 2),
                   sl=round(sl_price, 2), margin=round(margin, 0),
                   score=s['anomaly_score'], residual=round(s['residual'], 1),
