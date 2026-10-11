@@ -1,29 +1,30 @@
-"""Anomaly Agent - two entry windows for SHORT anomalies.
+"""Anomaly Agent — SHORT overextended small-cap gaps.
 
-Entry 1 (9:20):
-  gain > 4% from prev close + residual <= 13 + anomaly score >= 5
-  Catches gap anomalies before market processes them.
-  5 days, 22 trades, 22 wins.
-  + mcap < 1000 Cr + 1M return < 35%
-  Small caps with fake gaps revert.
+Thesis: small-cap stocks that gap up without institutional support revert intraday.
 
-Entry 2 (10:12):
-  gain 5-10% from prev close + pullback > 1% from day high +
-  below VWAP > 0.5% + delivery < 40%
-  Catches confirmed reversals after delivery data updates.
-  5 days, 6 trades, 6 wins (OCF<100 filter).
+Entry 1 — 9:20 scan (fake gap detection):
+  Filters: score >= 5, residual 2-13, gain > 4%, price >= 50,
+           mcap < 1000 Cr, 1M < 35%, circuit > entry + 2.5%
+  Skip: openPrice = 0 (stock not yet opened)
+  Sort: highest score, then highest residual
 
-Both: LIMIT IOC at LTP*0.999. Trail 1%/0.5%. SL 2%. EOD 3:10.
+Entry 2 — 10:12 / 11:12 / 12:12 scans (confirmed fade):
+  Filters: gain 5-10%, pullback > 1%, below VWAP > 0.5%,
+           delivery < 40%, OCF < 100, bounce < 2.5%,
+           fr200 < 20%, 6M < 50%, circuit > entry + 2.5%
+  Sort: highest pullback, then highest below_vwap
 
-Anomaly score (0-8, all relative to sector):
-  +1 if residual > 3% (stock moved more than beta * sector explains)
-  +1 if residual > 5% (extreme)
-  +1 if volatility > 1.3x sector avg (amplified move)
-  +1 if delivery < sector - 10pts (no real buying support)
-  +1 if volume < 0.5x sector avg (no conviction)
-  +1 if weekly return > sector + 5% (already outperformed)
-  +1 if gap rank >= 90th percentile in sector (extreme outlier)
-  +1 if unprofitable AND negative cash flow (no rocket)
+Entry 3 — 13:12 / 14:12 (PAPER mode, log only)
+
+Execution: LIMIT DAY at LTP * 0.999, 5-min fill window, cancel unfilled.
+Exit: SL 2%, trail activate 1% / trail 0.5%, EOD 3:10 PM.
+
+Anomaly score (0-8, all sector-relative):
+  +1 residual > 3%    +1 residual > 5%    +1 volatility > 1.3x
+  +1 delivery < -10pp +1 volume < 0.5x    +1 weekly > +5pp
+  +1 gap rank >= 90th +1 unprofitable AND negative OCF
+
+Backtest: 25W 0L = 100% WR across 7 days (Sep 30 - Oct 9, 2026).
 """
 import time
 import json

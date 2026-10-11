@@ -1,17 +1,19 @@
-"""News ORB Agent — Gemini news scan + Opening Range Breakout entry.
+"""News Confirmation Agent — Gemini news scan + delivery confirmation entry.
+
+Thesis: Gemini picks stocks with news catalysts. Enter only when BOTH
+price direction AND delivery increase confirm institutional participation.
 
 Timeline:
-  9:05  — Scan RSS + Gemini analysis (must finish by 9:14)
-  9:15  — Market opens, collect OR (15 min)
-  9:30  — Apply filters, place limit orders
-  9:30-2:45 — Monitor fills via broker order book
-  2:45  — Cancel unfilled orders
+  9:05  — Scan RSS + NSE/BSE filings + Gemini analysis
+  9:15  — Collect opening range (5 min)
+  9:20  — Record baseline LTP + delivery for each candidate
+  11:12 — Check confirmation: price moved > 0.5% in Gemini direction
+          AND delivery increased > 2pp from baseline
+  11:12 — Enter confirmed trades (currently PAPER_MODE = True)
 
-Safeguards:
-  - Check time before wasting Gemini quota
-  - Hard deadline: analysis must finish by 9:14
-  - Retry failed Gemini calls once
-  - NaN protection on ATR/SL
+Exit: SL 2%, trail activate 1% / trail 0.5%, EOD 3:10 PM.
+
+Status: 5W 0L on paper. Need 20+ confirmed trades before going live.
 """
 import math
 import time
