@@ -221,7 +221,7 @@ class Broker:
         """Check via order book. Returns (filled, traded_price)."""
         book = self._api.get_order_book() or []
         for o in book:
-            if o.get('id') == order_id or o.get('order_id') == order_id:
+            if o.get('id') == order_id:
                 status = o.get('status', '').upper()
                 traded_qty = int(o.get('traded_qty', 0) or 0)
                 # Check multiple fill indicators
