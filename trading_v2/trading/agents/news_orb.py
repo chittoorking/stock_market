@@ -9,7 +9,7 @@ Timeline:
   9:20  — Record baseline LTP + delivery for each candidate
   11:12 — Check confirmation: price moved > 0.5% in Gemini direction
           AND delivery increased > 2pp from baseline
-  11:12 — Enter confirmed trades (currently PAPER_MODE = True)
+  11:12 — Enter confirmed trades (currently PAPER_MODE = False)
 
 Exit: SL 2%, trail activate 1% / trail 0.5%, EOD 3:10 PM.
 
@@ -27,7 +27,7 @@ from trading.logger import audit
 
 class NewsOrbAgent(BaseAgent):
     name = 'news_orb'
-    PAPER_MODE = True  # Set False to go live
+    PAPER_MODE = False  # Set False to go live
 
     def run(self):
         """Loop daily: wait for 9:05 -> scan -> analyze -> OR -> filter -> trade."""
