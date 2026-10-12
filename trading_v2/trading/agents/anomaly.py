@@ -458,9 +458,8 @@ class AnomalyAgent(BaseAgent):
                 trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                 trade_id=trade_id,
             )
-            self._entered.add(sym)
-
             is_reentry = sym in self._entered
+            self._entered.add(sym)
             audit('anomaly', 'RE_ENTRY' if is_reentry else 'ENTRY', sym,
                   side='SHORT', qty=actual_qty, entry=round(actual_price, 2),
                   sl=round(sl_price, 2), margin=round(margin, 0),
