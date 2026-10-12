@@ -48,7 +48,7 @@ ENTRY_TIMES = [
     (14, 12),  # afternoon - paper mode
 ]
 
-MAX_TRADES = 5
+MAX_TRADES = 10
 SL_PCT = 2.0
 TRAIL_ACTIVATE = 1.0
 TRAIL_PCT = 0.5
