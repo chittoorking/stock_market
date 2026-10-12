@@ -9,8 +9,8 @@ CE_MIN_SCORE = 19          # 84% WR
 FUT_MIN_SCORE = 6          # score 6+ = 100% WR on live signals
 
 # ── Fund manager ────────────────────────────────────────────────────
-MAX_CONCURRENT = 10
-MAX_PER_STRATEGY = 5
+MAX_CONCURRENT = 15
+MAX_PER_STRATEGY = 10
 DAILY_LOSS_PCT = 10.0
 EQUITY_RISK_PCT = 2.0
 
