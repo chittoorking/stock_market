@@ -386,7 +386,7 @@ class AnomalyAgent(BaseAgent):
                 continue
 
             try:
-                entry_price = round(live_ltp * 0.999, 2)
+                entry_price = round(live_ltp * 0.997, 2)  # 0.3% below = thesis confirmation
                 order_id = self._broker.sell(sym, qty, price=entry_price,
                                              order_type='LIMIT', product='INTRADAY')
                 pending.append({
