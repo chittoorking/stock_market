@@ -63,7 +63,8 @@ class PositionManager:
 
         # Verify position still exists at broker before sending exit order
         # Prevents creating new position if user already closed manually
-        if not skip_sell:
+        # SKIP for FnO positions — get_positions() only returns equity
+        if not skip_sell and not getattr(pos, 'fno_sec_id', ''):
             try:
                 from live.indmoney_client import get_positions
                 broker_pos = get_positions() or []
