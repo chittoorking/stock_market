@@ -62,6 +62,7 @@ class AnomalyAgent(BaseAgent):
     def __init__(self, broker, positions, fund_manager, monitor):
         super().__init__(broker, positions, fund_manager, monitor)
         self._entered = set()  # tracks all tickers entered today (for re-entry logging)
+        self._sl_hit = set()   # tickers that hit SL today — no re-entry
         self._ml_session = None
         self._ml_action = None
 
@@ -93,6 +94,7 @@ class AnomalyAgent(BaseAgent):
             return
 
         self._entered.clear()
+        self._sl_hit.clear()
         self._fm.reset_daily()
         price_tracker.reset()
         price_tracker.start()
@@ -199,6 +201,7 @@ class AnomalyAgent(BaseAgent):
                           and s['residual'] > 2
                           and s['residual'] <= 13
                           and not self._positions.find_by_symbol(s['ticker'])
+                          and s['ticker'] not in self._sl_hit
                           and s['ltp'] >= MIN_PRICE]
             # Filter: gain must be > 4% from prev close
             candidates = [s for s in candidates
@@ -216,6 +219,7 @@ class AnomalyAgent(BaseAgent):
             candidates = []
             for s in stocks:
                 if self._positions.find_by_symbol(s['ticker']): continue
+                if s['ticker'] in self._sl_hit: continue
                 if s['ltp'] < MIN_PRICE: continue
                 # Only short weak fundamentals (OCF < 100)
                 if s.get("ocf", 0) >= 100:
@@ -316,6 +320,28 @@ class AnomalyAgent(BaseAgent):
 
         # Place all orders at once, then wait and check fills
         self._place_and_fill(to_trade)
+
+        # Check for SL hits — block re-entry for those tickers
+        for sym in list(self._entered):
+            if not self._positions.find_by_symbol(sym):
+                # Position closed. Check if it was SL by reading audit
+                try:
+                    from pathlib import Path
+                    import json as _json
+                    today = datetime.now().strftime('%Y%m%d')
+                    audit_file = Path(__file__).parent.parent.parent.parent / 'live' / 'logs' / f'audit_{today}.jsonl'
+                    if audit_file.exists():
+                        for line in open(audit_file):
+                            r = _json.loads(line)
+                            if (r.get('symbol') == sym and
+                                r.get('action') == 'EXIT' and
+                                r.get('reason') == 'SL_HIT' and
+                                r.get('component') == 'monitor'):
+                                self._sl_hit.add(sym)
+                                self._log.info(f'{sym}: SL hit — blocked from re-entry')
+                                break
+                except Exception:
+                    pass
 
     def _place_and_fill(self, candidates):
         """Place all SHORT orders at once, wait up to 5 min, check fills."""
