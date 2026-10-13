@@ -63,17 +63,27 @@ class PositionManager:
 
         # Verify position still exists at broker before sending exit order
         # Prevents creating new position if user already closed manually
-        # SKIP for FnO positions — get_positions() only returns equity
-        if not skip_sell and not getattr(pos, 'fno_sec_id', ''):
+        if not skip_sell:
             try:
-                from live.indmoney_client import get_positions
-                broker_pos = get_positions() or []
+                import requests as _req
+                from live.indmoney_client import headers as _headers
+                is_fno = bool(getattr(pos, 'fno_sec_id', ''))
+                segment = 'fno' if is_fno else 'equity'
+                _r = _req.get(f'https://api.indstocks.com/portfolio/positions?segment={segment}&product=intraday',
+                             headers=_headers(), timeout=10)
+                broker_pos = []
+                if _r.status_code == 200:
+                    _data = _r.json().get('data', {})
+                    if isinstance(_data, list):
+                        broker_pos = _data
+                    elif isinstance(_data, dict):
+                        broker_pos = _data.get('net_positions', [])
                 has_position = any(
                     p.get('symbol', '') == pos.symbol and abs(p.get('net_qty', 0)) > 0
                     for p in broker_pos
                 )
                 if not has_position:
-                    log.warning(f'{pos.symbol}: not found at broker — closed manually')
+                    log.warning(f'{pos.symbol}: not found at broker ({segment}) — closed manually')
                     audit('positions', 'MANUAL_BROKER_CLOSE', pos.symbol,
                           pos_id=pos_id, entry=pos.entry_price,
                           ltp=exit_price, strategy=pos.strategy)
