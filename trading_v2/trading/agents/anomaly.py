@@ -213,6 +213,9 @@ class AnomalyAgent(BaseAgent):
             # Circuit filter: skip if upper circuit < entry + 2.5% (SL can't fill before circuit)
             candidates = [s for s in candidates
                           if s.get('upper_circuit', 9999) > s['ltp'] * 1.025]
+            # Skip multi-day momentum: 10%+ gain in prior 4 days = circuit continuation
+            candidates = [s for s in candidates
+                          if (s.get('wk', 0) - s.get('gain_from_prev', 0)) < 10]
             candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
         elif is_second_scan:
             # 10:12: gain 5-10% + pullback>1% + below VWAP>0.5% + delivery<40% + OCF<100
