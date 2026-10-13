@@ -277,6 +277,12 @@ class AnomalyAgent(BaseAgent):
                     audit('anomaly', 'SKIP_CIRCUIT', s['ticker'],
                           gain=round(gain, 1), ltp=s['ltp'], upper_circuit=uc)
                     continue
+                # Skip multi-day momentum: 10%+ gain in prior 4 days = circuit continuation
+                prior_4d = s.get('wk', 0) - gain
+                if prior_4d > 10:
+                    audit('anomaly', 'SKIP_MOMENTUM', s['ticker'],
+                          gain=round(gain, 1), wk=round(s.get('wk', 0), 1), prior_4d=round(prior_4d, 1))
+                    continue
                 candidates.append(s)
             candidates.sort(key=lambda x: (-x['pullback'], -x['below_vwap']))
         else:
