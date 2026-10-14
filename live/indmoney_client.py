@@ -304,7 +304,8 @@ def place_trigger_order(sym: str, qty: int, side: str, trigger_price: float,
     try:
         r = requests.post(f'{BASE}/smart/order', headers=headers(), json=payload, timeout=10)
         resp = r.json() if r.status_code == 200 else {}
-        oid = (resp or {}).get('data', {}).get('order_id', '')
+        order_data = (resp or {}).get("data", {}).get("order_data", [{}])
+        oid = order_data[0].get("order_id", "") if order_data else ""
         if oid:
             log.info(f'GTT placed: {side} {qty} {sym} trigger={trigger_price} -> {oid}')
             return str(oid)
@@ -320,6 +321,8 @@ def modify_trigger_order(order_id: str, trigger_price: float,
     """Modify GTT trigger price. Returns True on success."""
     payload = {
         'order_id': order_id,
+        'segment': 'EQUITY',
+        'algo_id': '99999',
         'trigger_price': trigger_price,
         'trigger_limit_price': trigger_limit_price,
     }
@@ -337,7 +340,7 @@ def modify_trigger_order(order_id: str, trigger_price: float,
 
 def cancel_trigger_order(order_id: str) -> bool:
     """Cancel a GTT order. Returns True on success."""
-    payload = {'order_id': order_id}
+    payload = {'order_id': order_id, 'segment': 'EQUITY'}
     try:
         r = requests.post(f'{BASE}/smart/order/cancel', headers=headers(), json=payload, timeout=10)
         resp = r.json() if r.status_code == 200 else {}
