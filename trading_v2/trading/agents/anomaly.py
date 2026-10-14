@@ -491,7 +491,7 @@ class AnomalyAgent(BaseAgent):
 
             sl_price = round(actual_price * (1 + SL_PCT / 100), 2)
 
-            self._positions.open(
+            _opened_pos = self._positions.open(
                 symbol=sym, side=Side.SELL, qty=actual_qty,
                 entry_price=actual_price, order_id=p['order_id'],
                 strategy=self.name, sl=sl_price,
@@ -505,11 +505,10 @@ class AnomalyAgent(BaseAgent):
             _tgt_limit   = tick_round(_tgt_trigger * 0.999)
             _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
             _gtt_tgt_id  = self._broker.place_gtt(sym, actual_qty, 'BUY', _tgt_trigger, _tgt_limit)
-            _pos = self._positions.get(sym)
-            if _pos:
-                _pos.gtt_sl_id      = _gtt_sl_id
-                _pos.gtt_target_id  = _gtt_tgt_id
-                _pos.gtt_target_pct = 5.0
+            _opened_pos.gtt_sl_id      = _gtt_sl_id
+            _opened_pos.gtt_target_id  = _gtt_tgt_id
+            _opened_pos.gtt_target_pct = 5.0
+            self._positions._save_to_disk()  # persist GTT IDs immediately
             # ------------------------------------------------------------------
             is_reentry = sym in self._entered
             self._entered.add(sym)
@@ -625,26 +624,25 @@ class AnomalyAgent(BaseAgent):
 
                 sl_price = round(actual_price * (1 + SL_PCT / 100), 2)
 
-                self._positions.open(
+                _opened_pos = self._positions.open(
                     symbol=sym, side=Side.SELL, qty=actual_qty,
                     entry_price=actual_price, order_id=p['order_id'],
                     strategy=self.name, sl=sl_price,
                     trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                     trade_id=p['trade_id'],
                 )
-            # -- Exchange GTTs: SL at +2%, target at -5% (trailing target)
-            _sl_trigger  = tick_round(actual_price * 1.02)
-            _sl_limit    = tick_round(_sl_trigger * 1.001)
-            _tgt_trigger = tick_round(actual_price * 0.95)
-            _tgt_limit   = tick_round(_tgt_trigger * 0.999)
-            _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
-            _gtt_tgt_id  = self._broker.place_gtt(sym, actual_qty, 'BUY', _tgt_trigger, _tgt_limit)
-            _pos = self._positions.get(sym)
-            if _pos:
-                _pos.gtt_sl_id      = _gtt_sl_id
-                _pos.gtt_target_id  = _gtt_tgt_id
-                _pos.gtt_target_pct = 5.0
-            # ------------------------------------------------------------------
+                # -- Exchange GTTs: SL at +2%, target at -5% (trailing target)
+                _sl_trigger  = tick_round(actual_price * 1.02)
+                _sl_limit    = tick_round(_sl_trigger * 1.001)
+                _tgt_trigger = tick_round(actual_price * 0.95)
+                _tgt_limit   = tick_round(_tgt_trigger * 0.999)
+                _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
+                _gtt_tgt_id  = self._broker.place_gtt(sym, actual_qty, 'BUY', _tgt_trigger, _tgt_limit)
+                _opened_pos.gtt_sl_id      = _gtt_sl_id
+                _opened_pos.gtt_target_id  = _gtt_tgt_id
+                _opened_pos.gtt_target_pct = 5.0
+                self._positions._save_to_disk()  # persist GTT IDs immediately
+                # --------------------------------------------------------------
 
                 is_reentry = sym in self._entered
                 self._entered.add(sym)
