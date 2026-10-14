@@ -9,7 +9,7 @@ from datetime import datetime
 
 from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
-from trading.logger import audit
+from trading.logger import audit, tg_alert
 from trading.services import multyfi_api, multyfi_scoring, symbol_resolver
 
 from trading.config import (PE_MIN_SCORE, CE_MIN_SCORE, FUT_MIN_SCORE,
@@ -119,6 +119,7 @@ class MulOptions(BaseAgent):
 
         if score >= threshold:
             self._log.info(f'TAKE {symbol} {opt_type} {strike} score={score} (min={threshold})')
+            tg_alert(f'MULTYFI ENTRY {symbol} {opt_type} score={score}')
             # Route to _handle_option via fd dict
             fd = dict(opt)
             fd['action'] = action
@@ -143,6 +144,7 @@ class MulOptions(BaseAgent):
                 sym = signal['symbol']
                 self._log.info(f'EXIT signal: {sym}')
                 audit('multyfi', 'EXIT_SIGNAL', sym)
+                tg_alert(f'MULTYFI EXIT SIGNAL: {sym}')
                 self._monitor.force_exit(sym, 'MULTYFI_EXIT', strategy=self.name)
 
         elif 'NEW' in msg and 'RECOMMENDATION' in msg:
