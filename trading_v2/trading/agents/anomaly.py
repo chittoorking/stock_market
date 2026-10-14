@@ -553,6 +553,7 @@ class AnomalyAgent(BaseAgent):
                 except Exception as e:
                     self._log.error(f'{sym}: second chance order failed: {e}')
                     self._fm.release(p['trade_id'], pnl=0)
+                    p['_failed'] = True
                     continue
 
             # Wait 5 min for second chance fills
@@ -560,7 +561,7 @@ class AnomalyAgent(BaseAgent):
                 time.sleep(30)
                 all_done = True
                 for p in second_chance:
-                    if p.get('filled') or not p.get('order_id'):
+                    if p.get('filled') or p.get('_failed') or not p.get('order_id'):
                         continue
                     filled, fill_price = self._broker.order_filled(p['order_id'])
                     if filled:
@@ -574,6 +575,8 @@ class AnomalyAgent(BaseAgent):
 
             # Process second chance results
             for p in second_chance:
+                if p.get('_failed'):
+                    continue
                 sym = p['sym']
                 s = p['signal']
 
