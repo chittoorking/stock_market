@@ -142,7 +142,7 @@ class Monitor:
                 self._exit(pos.id, price, 'TARGET_HIT')
                 return
 
-        # Trail
+        # Trail (software fallback only — GTT SL is fixed at exchange, never moved)
         if pos.trail_activate_pct > 0 and pos.trail_pct > 0:
             if not pos.trail_active and move >= pos.trail_activate_pct:
                 pos.trail_active = True
@@ -154,35 +154,27 @@ class Monitor:
                     drop = (price - peak) / peak * 100
                 else:
                     drop = (peak - price) / peak * 100
-                if drop <= -pos.trail_pct:
-                    # Calculate new trailing SL (for SHORT: SL tracks above peak)
-                    new_sl = round(pos.peak_price * (1 + pos.trail_pct / 100), 2)
-                    # -- GTT SL: modify exchange order instead of software exit
-                    if getattr(pos, gtt_sl_id, ):
-                        _new_sl_lmt = round(new_sl * 1.001, 2)
-                        if self._broker.modify_gtt(pos.gtt_sl_id, new_sl, _new_sl_lmt):
-                            audit(monitor, TRAIL_GTT_MOVE, pos.symbol,
-                                  old_sl=round(pos.sl, 2), new_sl=round(new_sl, 2))
-                            pos.sl = new_sl
-                    else:
-                        # Fallback: software exit if no GTT
-                        self._exit(pos.id, price, TRAIL_EXIT)
-
-                    # -- Trailing target: extend when within 1% of current target
-                    if getattr(pos, gtt_target_id, ) and getattr(pos, gtt_target_pct, 0) > 0:
-                        _entry = pos.entry_price
-                        _profit_pct = (_entry - price) / _entry * 100
-                        _tgt_pct = pos.gtt_target_pct
-                        if _profit_pct >= _tgt_pct - 1.0:
-                            _new_tgt_pct = _tgt_pct + 0.5
-                            _new_tgt_trigger = tick_round(_entry * (1 - _new_tgt_pct / 100))
-                            _new_tgt_limit   = tick_round(_new_tgt_trigger * 0.999)
-                            if self._broker.modify_gtt(pos.gtt_target_id, _new_tgt_trigger, _new_tgt_limit):
-                                audit(monitor, TARGET_GTT_EXTEND, pos.symbol,
-                                      old_tgt=_tgt_pct, new_tgt=_new_tgt_pct,
-                                      trigger=round(_new_tgt_trigger, 2))
-                                pos.gtt_target_pct = _new_tgt_pct
+                if drop <= -pos.trail_pct and not getattr(pos, 'gtt_sl_id', ''):
+                    # Software exit only when no exchange GTT present (fallback)
+                    self._exit(pos.id, price, 'TRAIL_EXIT')
                     return
+
+        # Trailing target: extend GTT target when profit within 1% of current target
+        # Runs every tick independently — SL is fixed, only target extends
+        if getattr(pos, 'gtt_target_id', '') and getattr(pos, 'gtt_target_pct', 0) > 0:
+            _entry = pos.entry_price
+            if _entry and _entry > 0:
+                _profit_pct = (_entry - price) / _entry * 100  # SHORT: positive when price falls
+                _tgt_pct = pos.gtt_target_pct
+                if _profit_pct >= _tgt_pct - 1.0:
+                    _new_tgt_pct = _tgt_pct + 0.5
+                    _new_tgt_trigger = tick_round(_entry * (1 - _new_tgt_pct / 100))
+                    _new_tgt_limit   = tick_round(_new_tgt_trigger * 0.999)
+                    if self._broker.modify_gtt(pos.gtt_target_id, _new_tgt_trigger, _new_tgt_limit):
+                        audit('monitor', 'TARGET_GTT_EXTEND', pos.symbol,
+                              old_tgt=_tgt_pct, new_tgt=_new_tgt_pct,
+                              trigger=round(_new_tgt_trigger, 2))
+                        pos.gtt_target_pct = _new_tgt_pct
 
     def _exit(self, pos_id: str, exit_price: float = 0, reason: str = 'MANUAL'):
         pos = self._pos.close(pos_id, exit_price=exit_price, reason=reason)
