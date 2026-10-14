@@ -178,6 +178,8 @@ class Monitor:
                           if p.symbol == symbol
                           and (strategy is None or p.strategy == strategy)]
         if not candidates:
+            tg_alert(f'EXIT SIGNAL but NO POSITION found: {symbol} ({reason})')
+            log.warning(f'force_exit: no position for {symbol} ({reason})')
             return False
         pos = candidates[0]
         price = self._broker.ltp_safe(pos.symbol, pos.entry_price)
