@@ -556,7 +556,7 @@ class AnomalyAgent(BaseAgent):
                     continue
 
             # Wait 5 min for second chance fills
-            for wait_round in range(10):
+            for wait_round in range(30):
                 time.sleep(30)
                 all_done = True
                 for p in second_chance:
