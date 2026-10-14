@@ -103,6 +103,35 @@ class Monitor:
         active = self._pos.active()
         if not active:
             return
+
+        # ── GTT Reconciliation ──────────────────────────────────────────────
+        # Detect positions closed at exchange by GTT (SL or target fired).
+        # If position gone at exchange but still in memory: close internally,
+        # cancel the surviving GTT, release capital, alert Telegram.
+        try:
+            from live.indmoney_client import get_positions as _get_pos
+            _broker_pos = _get_pos() or []
+            _live_syms = {
+                p['symbol'] for p in _broker_pos
+                if abs(p.get('net_qty', 0)) > 0
+            }
+            for _rpos in list(active):
+                if _rpos.symbol not in _live_syms and not _rpos.closed:
+                    _ltp = self._broker.ltp_safe(_rpos.symbol, _rpos.entry_price)
+                    audit('monitor', 'GTT_FIRED_DETECTED', _rpos.symbol,
+                          pos_id=_rpos.id, ltp=_ltp,
+                          gtt_sl=getattr(_rpos, 'gtt_sl_id', ''),
+                          gtt_tgt=getattr(_rpos, 'gtt_target_id', ''))
+                    self._exit(_rpos.id, _ltp, 'GTT_FIRED')
+                    active = [p for p in active if p.id != _rpos.id]
+        except Exception as _re:
+            log.warning(f'GTT reconcile error: {_re}')
+        # ────────────────────────────────────────────────────────────────────
+
+        active = [p for p in active if not p.closed]  # re-filter after reconcile
+        if not active:
+            return
+
         symbols = list(set(p.symbol for p in active))
         try:
             prices = self._broker._api.get_ltp(symbols)
