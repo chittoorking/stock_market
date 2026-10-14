@@ -65,7 +65,6 @@ class AnomalyAgent(BaseAgent):
         self._sl_hit = set()   # tickers that hit SL today — no re-entry
         self._ml_session = None
         self._ml_action = None
-        self._sl_orders = {}  # sym -> exchange SL order_id
 
     def run(self):
         """Main loop: wait for each heartbeat, scan, trade."""
@@ -98,7 +97,6 @@ class AnomalyAgent(BaseAgent):
         self._sl_hit.clear()
         self._fm.reset_daily()
         price_tracker.reset()
-        self._sl_orders.clear()
         price_tracker.start()
         self._log.info('=== ANOMALY AGENT START ===')
 
@@ -390,14 +388,18 @@ class AnomalyAgent(BaseAgent):
 
             try:
                 entry_price = round(live_ltp * 0.998, 2)  # 0.2% below = thesis confirmation
-                order_id = self._broker.sell(sym, qty, price=entry_price,
-                                             order_type='LIMIT', product='INTRADAY')
+                sl_trigger = round(entry_price * (1 + SL_PCT / 100), 2)
+                sl_limit = round(sl_trigger * 1.002, 2)  # 0.2% above trigger = fill buffer
+                result = self._broker.sell_smart(sym, qty, limit_price=entry_price,
+                                                 sl_trigger=sl_trigger, sl_limit=sl_limit)
+                order_id = result['parent']
+                sl_order_id = result.get('child', '')
                 pending.append({
                     'sym': sym, 'qty': qty, 'entry_price': entry_price,
-                    'order_id': order_id, 'trade_id': trade_id,
-                    'margin': margin, 'signal': s,
+                    'order_id': order_id, 'sl_order_id': sl_order_id,
+                    'trade_id': trade_id, 'margin': margin, 'signal': s,
                 })
-                self._log.info(f'ORDER PLACED: SHORT {sym} qty={qty} @ {entry_price:.1f}')
+                self._log.info(f'ORDER PLACED: SHORT {sym} qty={qty} @ {entry_price:.1f} SL_ORDER={sl_order_id}')
             except Exception as e:
                 self._log.error(f'{sym}: order failed: {e}')
                 self._fm.release(trade_id, pnl=0)
@@ -512,9 +514,6 @@ class AnomalyAgent(BaseAgent):
                           f'SL={sl_price:.1f} score={s["anomaly_score"]} '
                           f'residual={s["residual"]:+.1f}')
             tg_alert(f'ENTRY SHORT {sym} qty={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
-            sl_oid = self._place_exchange_sl(sym, actual_qty, sl_price)
-            if sl_oid:
-                self._sl_orders[sym] = sl_oid
 
         # Phase 4: Second chance for unfilled orders
         second_chance = [p for p in pending if p.get('_second_chance') and not p.get('filled')]
@@ -548,13 +547,17 @@ class AnomalyAgent(BaseAgent):
                 self._log.info(f'{sym}: second chance — stock flat/lower {scan_ltp:.1f} -> {current_ltp:.1f}, new entry {new_entry:.1f}')
 
                 try:
-                    new_order_id = self._broker.sell(sym, p['qty'], price=new_entry,
-                                                     order_type='LIMIT', product='INTRADAY')
+                    sc_sl_trigger = round(new_entry * (1 + SL_PCT / 100), 2)
+                    sc_sl_limit = round(sc_sl_trigger * 1.002, 2)
+                    sc_result = self._broker.sell_smart(sym, p['qty'], limit_price=new_entry,
+                                                        sl_trigger=sc_sl_trigger, sl_limit=sc_sl_limit)
+                    new_order_id = sc_result['parent']
                     p['order_id'] = new_order_id
+                    p['sl_order_id'] = sc_result.get('child', '')
                     p['entry_price'] = new_entry
                     audit('anomaly', 'SECOND_CHANCE_ORDER', sym,
                           scan_ltp=round(scan_ltp, 2), current_ltp=round(current_ltp, 2),
-                          new_entry=new_entry, order_id=new_order_id)
+                          new_entry=new_entry, order_id=new_order_id, sl_order=p['sl_order_id'])
                 except Exception as e:
                     self._log.error(f'{sym}: second chance order failed: {e}')
                     self._fm.release(p['trade_id'], pnl=0)
@@ -632,30 +635,8 @@ class AnomalyAgent(BaseAgent):
                       sl=round(sl_price, 2), scan_ltp=round(p['_scan_ltp'], 2),
                       score=s['anomaly_score'], residual=round(s['residual'], 1))
 
-                sl_oid = self._place_exchange_sl(sym, actual_qty, sl_price)
-                if sl_oid:
-                    self._sl_orders[sym] = sl_oid
                 self._log.info(f'SECOND CHANCE SHORT {sym} filled={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
                 tg_alert(f'2ND CHANCE SHORT {sym} qty={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
-
-
-    def _place_exchange_sl(self, sym, qty, sl_price):
-        # Place a BUY LIMIT at sl_price directly on the exchange.
-        # Primary SL: fills immediately when price hits sl_price, no polling delay.
-        # Software monitor still handles trail / EOD exits.
-        try:
-            order_id = self._broker.buy(
-                sym, qty, price=round(sl_price, 2),
-                order_type='LIMIT', product='INTRADAY'
-            )
-            audit('anomaly', 'EXCHANGE_SL_PLACED', sym,
-                  sl_price=round(sl_price, 2), qty=qty, order_id=order_id)
-            self._log.info(f'{sym}: exchange SL BUY @ {sl_price:.2f} order={order_id}')
-            return order_id
-        except Exception as e:
-            self._log.error(f'{sym}: exchange SL FAILED: {e}')
-            tg_alert(f'WARNING: {sym} exchange SL failed -- software SL only!')
-            return None
 
     def _fetch_market_lens(self):
         """Fetch all stocks from NSE Market Lens."""
