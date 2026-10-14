@@ -65,6 +65,7 @@ class AnomalyAgent(BaseAgent):
         self._sl_hit = set()   # tickers that hit SL today — no re-entry
         self._ml_session = None
         self._ml_action = None
+        self._sl_orders = {}  # sym -> exchange SL order_id
 
     def run(self):
         """Main loop: wait for each heartbeat, scan, trade."""
@@ -97,6 +98,7 @@ class AnomalyAgent(BaseAgent):
         self._sl_hit.clear()
         self._fm.reset_daily()
         price_tracker.reset()
+        self._sl_orders.clear()
         price_tracker.start()
         self._log.info('=== ANOMALY AGENT START ===')
 
@@ -510,6 +512,9 @@ class AnomalyAgent(BaseAgent):
                           f'SL={sl_price:.1f} score={s["anomaly_score"]} '
                           f'residual={s["residual"]:+.1f}')
             tg_alert(f'ENTRY SHORT {sym} qty={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
+            sl_oid = self._place_exchange_sl(sym, actual_qty, sl_price)
+            if sl_oid:
+                self._sl_orders[sym] = sl_oid
 
         # Phase 4: Second chance for unfilled orders
         second_chance = [p for p in pending if p.get('_second_chance') and not p.get('filled')]
@@ -627,8 +632,30 @@ class AnomalyAgent(BaseAgent):
                       sl=round(sl_price, 2), scan_ltp=round(p['_scan_ltp'], 2),
                       score=s['anomaly_score'], residual=round(s['residual'], 1))
 
+                sl_oid = self._place_exchange_sl(sym, actual_qty, sl_price)
+                if sl_oid:
+                    self._sl_orders[sym] = sl_oid
                 self._log.info(f'SECOND CHANCE SHORT {sym} filled={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
                 tg_alert(f'2ND CHANCE SHORT {sym} qty={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
+
+
+    def _place_exchange_sl(self, sym, qty, sl_price):
+        # Place a BUY LIMIT at sl_price directly on the exchange.
+        # Primary SL: fills immediately when price hits sl_price, no polling delay.
+        # Software monitor still handles trail / EOD exits.
+        try:
+            order_id = self._broker.buy(
+                sym, qty, price=round(sl_price, 2),
+                order_type='LIMIT', product='INTRADAY'
+            )
+            audit('anomaly', 'EXCHANGE_SL_PLACED', sym,
+                  sl_price=round(sl_price, 2), qty=qty, order_id=order_id)
+            self._log.info(f'{sym}: exchange SL BUY @ {sl_price:.2f} order={order_id}')
+            return order_id
+        except Exception as e:
+            self._log.error(f'{sym}: exchange SL FAILED: {e}')
+            tg_alert(f'WARNING: {sym} exchange SL failed -- software SL only!')
+            return None
 
     def _fetch_market_lens(self):
         """Fetch all stocks from NSE Market Lens."""
