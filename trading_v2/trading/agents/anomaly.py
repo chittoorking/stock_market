@@ -4,7 +4,7 @@ Thesis: small-cap stocks that gap up without institutional support revert intrad
 
 Entry 1 — 9:20 scan (fake gap detection):
   Filters: score >= 5, residual 2-13, gain > 4%, price >= 50,
-           mcap < 1000 Cr, 1M < 35%, circuit > entry + 2.5%
+           150 Cr <= mcap < 1000 Cr, 1M < 35%, circuit > entry + 2.5%
   Skip: openPrice = 0 (stock not yet opened)
   Sort: highest score, then highest residual
 
@@ -208,7 +208,7 @@ class AnomalyAgent(BaseAgent):
                           if s.get('gain_from_prev', 0) > 4]
             # Filter: small caps only + not momentum continuation
             candidates = [s for s in candidates
-                          if s.get('mcap', 9999) < 1000
+                          if s.get("mcap", 0) >= 150 and s.get("mcap", 9999) < 1000
                           and s.get('mo', 0) < 35]
             # Circuit filter: skip if upper circuit < entry + 2.5% (SL can't fill before circuit)
             candidates = [s for s in candidates
