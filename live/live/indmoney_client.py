@@ -256,6 +256,73 @@ def get_historical_candles(sym, interval, start_ts, end_ts):
     return []
 
 
+def place_trigger_order(sym: str, qty: int, side: str, trigger_price: float,
+                         trigger_limit_price: float, product: str = "INTRADAY") -> str:
+    """Place a GTT TRIGGER order at exchange. Returns GTT-XXXXXX id or empty string."""
+    token = get_token()
+    security_id = SCRIP_CODES.get(sym, "")
+    if not security_id:
+        log.error("place_trigger_order: unknown sym %s", sym)
+        return ""
+    security_id = security_id.split("_")[1]
+    payload = {
+        "txn_type": side,
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "product": product,
+        "order_type": "TRIGGER",
+        "validity": "DAY",
+        "security_id": security_id,
+        "qty": qty,
+        "algo_id": "99999",
+        "trigger_price": trigger_price,
+        "trigger_limit_price": trigger_limit_price,
+    }
+    try:
+        import requests as _req
+        r = _req.post(f"{BASE}/smart/order", headers=headers(), json=payload, timeout=10)
+        resp = r.json() if r.status_code == 200 else {}
+        oid = (resp or {}).get("data", {}).get("order_id", "")
+        if oid:
+            return str(oid)
+        log.error("place_trigger_order no order_id: %s", resp)
+        return ""
+    except Exception as e:
+        log.error("place_trigger_order exception: %s", e)
+        return ""
+
+
+def modify_trigger_order(order_id: str, trigger_price: float,
+                          trigger_limit_price: float) -> bool:
+    """Modify GTT trigger price. Returns True on success."""
+    payload = {
+        "order_id": order_id,
+        "trigger_price": trigger_price,
+        "trigger_limit_price": trigger_limit_price,
+    }
+    try:
+        import requests as _req
+        r = _req.post(f"{BASE}/smart/order/modify", headers=headers(), json=payload, timeout=10)
+        resp = r.json() if r.status_code == 200 else {}
+        return bool((resp or {}).get("data"))
+    except Exception as e:
+        log.error("modify_trigger_order %s exception: %s", order_id, e)
+        return False
+
+
+def cancel_trigger_order(order_id: str) -> bool:
+    """Cancel a GTT order. Returns True on success."""
+    payload = {"order_id": order_id}
+    try:
+        import requests as _req
+        r = _req.post(f"{BASE}/smart/order/cancel", headers=headers(), json=payload, timeout=10)
+        resp = r.json() if r.status_code == 200 else {}
+        return bool((resp or {}).get("data"))
+    except Exception as e:
+        log.error("cancel_trigger_order %s exception: %s", order_id, e)
+        return False
+
+
 def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', trigger_price=0):
     """Place order via INDstocks API.
     side: 'BUY' or 'SELL'
