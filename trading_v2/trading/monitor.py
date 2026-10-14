@@ -210,21 +210,27 @@ class Monitor:
                     self._exit(pos.id, price, 'TRAIL_EXIT')
                     return
 
-        # Trailing target: extend GTT target when profit within 1% of current target
-        # Runs every tick independently — SL is fixed, only target extends
+        # Trailing target: extend BUY LIMIT when profit within 1% of current target
+        # Cancel old limit order, place new one at extended price
         if getattr(pos, 'gtt_target_id', '') and getattr(pos, 'gtt_target_pct', 0) > 0:
             _entry = pos.entry_price
             if _entry and _entry > 0:
                 _profit_pct = (_entry - price) / _entry * 100  # SHORT: positive when price falls
                 _tgt_pct = pos.gtt_target_pct
                 if _profit_pct >= _tgt_pct - 1.0:
-                    _new_tgt_pct = _tgt_pct + 0.5
-                    _new_tgt_trigger = tick_round(_entry * (1 - _new_tgt_pct / 100))
-                    _new_tgt_limit   = tick_round(_new_tgt_trigger * 0.999)
-                    if self._broker.modify_gtt(pos.gtt_target_id, _new_tgt_trigger, _new_tgt_limit):
-                        audit('monitor', 'TARGET_GTT_EXTEND', pos.symbol,
+                    _new_tgt_pct   = _tgt_pct + 0.5
+                    _new_tgt_price = tick_round(_entry * (1 - _new_tgt_pct / 100))
+                    try:
+                        self._broker._api.cancel_order(pos.gtt_target_id)
+                    except Exception:
+                        pass
+                    _new_oid = self._broker.buy(pos.symbol, pos.qty,
+                                                price=_new_tgt_price, order_type='LIMIT')
+                    if _new_oid:
+                        audit('monitor', 'TARGET_LIMIT_EXTEND', pos.symbol,
                               old_tgt=_tgt_pct, new_tgt=_new_tgt_pct,
-                              trigger=round(_new_tgt_trigger, 2))
+                              price=round(_new_tgt_price, 2))
+                        pos.gtt_target_id  = _new_oid
                         pos.gtt_target_pct = _new_tgt_pct
 
     def _exit(self, pos_id: str, exit_price: float = 0, reason: str = 'MANUAL'):
