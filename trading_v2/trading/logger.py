@@ -80,3 +80,13 @@ def audit(component: str, action: str, symbol: str = '', **kw):
             _ml_enricher(component, action, symbol, **kw)
         except Exception:
             pass
+
+
+def tg_alert(msg):
+    """Send alert to Telegram."""
+    try:
+        import requests as _r
+        _r.post('https://api.telegram.org/bot8831033342:AAGstfFaVjPPvSykkCwfQIS9O8iYujqHivs/sendMessage',
+                json={'chat_id': '866752968', 'text': msg}, timeout=5)
+    except Exception:
+        pass

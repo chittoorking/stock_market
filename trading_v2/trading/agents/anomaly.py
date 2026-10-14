@@ -33,7 +33,7 @@ from collections import defaultdict
 
 from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
-from trading.logger import audit, get_logger
+from trading.logger import audit, get_logger, tg_alert
 from trading.services import price_tracker
 
 log = get_logger('anomaly')
@@ -348,6 +348,7 @@ class AnomalyAgent(BaseAgent):
                                 r.get('component') == 'monitor'):
                                 self._sl_hit.add(sym)
                                 self._log.info(f'{sym}: SL hit — blocked from re-entry')
+                                tg_alert(f'SL HIT {sym} — blocked from re-entry')
                                 break
                 except Exception:
                     pass
@@ -508,6 +509,7 @@ class AnomalyAgent(BaseAgent):
             self._log.info(f'SHORT {sym} filled={actual_qty}/{p["qty"]} @ {actual_price:.1f} '
                           f'SL={sl_price:.1f} score={s["anomaly_score"]} '
                           f'residual={s["residual"]:+.1f}')
+            tg_alert(f'ENTRY SHORT {sym} qty={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
 
         # Phase 4: Second chance for unfilled orders
         second_chance = [p for p in pending if p.get('_second_chance') and not p.get('filled')]
@@ -623,6 +625,7 @@ class AnomalyAgent(BaseAgent):
                       score=s['anomaly_score'], residual=round(s['residual'], 1))
 
                 self._log.info(f'SECOND CHANCE SHORT {sym} filled={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
+                tg_alert(f'2ND CHANCE SHORT {sym} qty={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
 
     def _fetch_market_lens(self):
         """Fetch all stocks from NSE Market Lens."""

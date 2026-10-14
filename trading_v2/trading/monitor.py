@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 
 from trading.types import Side
-from trading.logger import audit, get_logger
+from trading.logger import audit, get_logger, tg_alert
 
 log = get_logger('monitor')
 
@@ -166,6 +166,7 @@ class Monitor:
                   side=pos.side.value, qty=pos.qty,
                   peak=round(pos.peak_price, 2) if pos.peak_price else 0,
                   trail_active=pos.trail_active)
+            tg_alert(f'{reason} {pos.symbol} pnl={pos.pnl:+.0f} ({pos.pnl_pct:+.1f}%) entry={pos.entry_price:.1f} exit={pos.exit_price:.1f}')
             if pos.trade_id:
                 self._fm.release(pos.trade_id, pnl=pos.pnl)
 

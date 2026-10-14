@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from trading.types import Position, Side
-from trading.logger import audit, get_logger
+from trading.logger import audit, get_logger, tg_alert
 
 log = get_logger('positions')
 
@@ -87,6 +87,7 @@ class PositionManager:
                     audit('positions', 'MANUAL_BROKER_CLOSE', pos.symbol,
                           pos_id=pos_id, entry=pos.entry_price,
                           ltp=exit_price, strategy=pos.strategy)
+                    tg_alert(f'MANUAL CLOSE {pos.symbol} (closed at broker)')
                     skip_sell = True
             except Exception as e:
                 log.warning(f'{pos.symbol}: broker position check failed ({e}), proceeding with exit')
