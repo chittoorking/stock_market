@@ -498,17 +498,16 @@ class AnomalyAgent(BaseAgent):
                 trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                 trade_id=trade_id,
             )
-            # -- Exchange GTTs: SL at +2%, target at -5% (trailing target)
+            # -- Exchange orders: SL = GTT TRIGGER, Target = BUY LIMIT
             _sl_trigger  = tick_round(actual_price * 1.02)
             _sl_limit    = tick_round(_sl_trigger * 1.001)
-            _tgt_trigger = tick_round(actual_price * 0.95)
-            _tgt_limit   = tick_round(_tgt_trigger * 0.999)
+            _tgt_price   = tick_round(actual_price * 0.95)
             _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
-            _gtt_tgt_id  = self._broker.place_gtt(sym, actual_qty, 'BUY', _tgt_trigger, _tgt_limit)
+            _lmt_tgt_id  = self._broker.buy(sym, actual_qty, price=_tgt_price, order_type='LIMIT')  # BUY LIMIT for target
             _opened_pos.gtt_sl_id      = _gtt_sl_id
-            _opened_pos.gtt_target_id  = _gtt_tgt_id
+            _opened_pos.gtt_target_id  = _lmt_tgt_id
             _opened_pos.gtt_target_pct = 5.0
-            self._positions._save_to_disk()  # persist GTT IDs immediately
+            self._positions._save_to_disk()  # persist IDs immediately
             # ------------------------------------------------------------------
             is_reentry = sym in self._entered
             self._entered.add(sym)
@@ -631,17 +630,16 @@ class AnomalyAgent(BaseAgent):
                     trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                     trade_id=p['trade_id'],
                 )
-                # -- Exchange GTTs: SL at +2%, target at -5% (trailing target)
+                # -- Exchange orders: SL = GTT TRIGGER, Target = BUY LIMIT
                 _sl_trigger  = tick_round(actual_price * 1.02)
                 _sl_limit    = tick_round(_sl_trigger * 1.001)
-                _tgt_trigger = tick_round(actual_price * 0.95)
-                _tgt_limit   = tick_round(_tgt_trigger * 0.999)
+                _tgt_price   = tick_round(actual_price * 0.95)
                 _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
-                _gtt_tgt_id  = self._broker.place_gtt(sym, actual_qty, 'BUY', _tgt_trigger, _tgt_limit)
+                _lmt_tgt_id  = self._broker.buy(sym, actual_qty, price=_tgt_price, order_type='LIMIT')  # BUY LIMIT for target
                 _opened_pos.gtt_sl_id      = _gtt_sl_id
-                _opened_pos.gtt_target_id  = _gtt_tgt_id
+                _opened_pos.gtt_target_id  = _lmt_tgt_id
                 _opened_pos.gtt_target_pct = 5.0
-                self._positions._save_to_disk()  # persist GTT IDs immediately
+                self._positions._save_to_disk()  # persist IDs immediately
                 # --------------------------------------------------------------
 
                 is_reentry = sym in self._entered

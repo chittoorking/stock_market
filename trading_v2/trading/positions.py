@@ -92,13 +92,15 @@ class PositionManager:
             except Exception as e:
                 log.warning(f'{pos.symbol}: broker position check failed ({e}), proceeding with exit')
 
-        # Cancel exchange GTTs before software exit (prevent ghost long)
-        for _gtt_id in [getattr(pos, "gtt_sl_id", ""), getattr(pos, "gtt_target_id", "")]:
-            if _gtt_id:
-                try:
-                    self._broker._api.cancel_trigger_order(_gtt_id)
-                except Exception:
-                    pass
+        # Cancel SL GTT trigger and target LIMIT order before software exit
+        _sl_id = getattr(pos, 'gtt_sl_id', '')
+        if _sl_id:
+            try: self._broker._api.cancel_trigger_order(_sl_id)
+            except Exception: pass
+        _tgt_id = getattr(pos, 'gtt_target_id', '')
+        if _tgt_id:
+            try: self._broker._api.cancel_order(_tgt_id)
+            except Exception: pass
         # Sell FIRST — don't remove position until confirmed
         sell_ok = True
         if not skip_sell:
