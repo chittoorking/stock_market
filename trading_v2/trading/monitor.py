@@ -117,12 +117,34 @@ class Monitor:
             }
             for _rpos in list(active):
                 if _rpos.symbol not in _live_syms and not _rpos.closed:
-                    _ltp = self._broker.ltp_safe(_rpos.symbol, _rpos.entry_price)
+                    # Try actual GTT fill price from order book first
+                    _fill_price = 0.0
+                    try:
+                        _book = self._broker._api.get_order_book() or []
+                        for _gtt_id in [getattr(_rpos, 'gtt_sl_id', ''),
+                                        getattr(_rpos, 'gtt_target_id', '')]:
+                            if not _gtt_id:
+                                continue
+                            for _o in _book:
+                                _oid = str(_o.get('id', '')) or str(_o.get('order_id', ''))
+                                _status = str(_o.get('status', '')).lower()
+                                if _oid == str(_gtt_id) and _status in ('complete', 'filled'):
+                                    _tp = float(_o.get('traded_price', 0) or 0)
+                                    if _tp > 0:
+                                        _fill_price = _tp
+                                        break
+                            if _fill_price > 0:
+                                break
+                    except Exception as _fe:
+                        log.warning(f'GTT fill price lookup failed: {_fe}')
+                    _exit_price = _fill_price if _fill_price > 0 else self._broker.ltp_safe(_rpos.symbol, _rpos.entry_price)
                     audit('monitor', 'GTT_FIRED_DETECTED', _rpos.symbol,
-                          pos_id=_rpos.id, ltp=_ltp,
+                          pos_id=_rpos.id, fill_price=round(_exit_price, 2),
+                          source='order_book' if _fill_price > 0 else 'ltp_fallback',
                           gtt_sl=getattr(_rpos, 'gtt_sl_id', ''),
                           gtt_tgt=getattr(_rpos, 'gtt_target_id', ''))
-                    self._exit(_rpos.id, _ltp, 'GTT_FIRED')
+                    audit('monitor', 'GTT_FILL_PRICE', _rpos.symbol, price=round(_exit_price, 2))
+                    self._exit(_rpos.id, _exit_price, 'GTT_FIRED')
                     active = [p for p in active if p.id != _rpos.id]
         except Exception as _re:
             log.warning(f'GTT reconcile error: {_re}')

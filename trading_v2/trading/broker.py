@@ -34,7 +34,8 @@ class Broker:
 
     def _validate(self):
         for attr in ['place_order', 'get_ltp', 'get_order_book', 'SCRIP_CODES',
-                      'cancel_order', 'get_funds', 'place_fno_order', 'get_option_chain']:
+                      'cancel_order', 'get_funds', 'place_fno_order', 'get_option_chain',
+                      'place_trigger_order', 'modify_trigger_order', 'cancel_trigger_order']:
             if not hasattr(self._api, attr):
                 raise BrokerError(f'Missing: {attr}')
 
