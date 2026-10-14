@@ -434,8 +434,11 @@ class AnomalyAgent(BaseAgent):
                     self._log.info(f'{sym}: order cancelled (no fill)')
                 except Exception as e:
                     self._log.warning(f'{sym}: cancel failed: {e}')
-                self._log.info(f'{sym}: no fill after 5 min - released')
-                self._fm.release(p['trade_id'], pnl=0)
+
+                # Second chance: wait until 30 min from scan, retry if stock flat/lower
+                scan_ltp = p['signal']['ltp']  # LTP at scan time
+                p['_second_chance'] = True
+                p['_scan_ltp'] = scan_ltp
                 audit('anomaly', 'NO_FILL', sym, order_id=p['order_id'])
                 continue
 
@@ -505,6 +508,121 @@ class AnomalyAgent(BaseAgent):
             self._log.info(f'SHORT {sym} filled={actual_qty}/{p["qty"]} @ {actual_price:.1f} '
                           f'SL={sl_price:.1f} score={s["anomaly_score"]} '
                           f'residual={s["residual"]:+.1f}')
+
+        # Phase 4: Second chance for unfilled orders
+        second_chance = [p for p in pending if p.get('_second_chance') and not p.get('filled')]
+        if second_chance:
+            # Wait remaining time until 30 min from scan
+            # We already waited ~5 min in Phase 2, wait 25 more
+            self._log.info(f'{len(second_chance)} unfilled — waiting for second chance at 30 min')
+            time.sleep(25 * 60)  # 25 min more = 30 min total from scan
+
+            for p in second_chance:
+                sym = p['sym']
+                scan_ltp = p['_scan_ltp']
+
+                # Check current LTP
+                current_ltp = self._broker.ltp_safe(sym)
+                if current_ltp <= 0:
+                    self._log.info(f'{sym}: no LTP for second chance')
+                    self._fm.release(p['trade_id'], pnl=0)
+                    continue
+
+                # Only retry if stock is flat or lower (not rising)
+                if current_ltp > scan_ltp:
+                    self._log.info(f'{sym}: went UP {scan_ltp:.1f} -> {current_ltp:.1f} — skip second chance')
+                    self._fm.release(p['trade_id'], pnl=0)
+                    audit('anomaly', 'SECOND_CHANCE_SKIP', sym,
+                          scan_ltp=round(scan_ltp, 2), current_ltp=round(current_ltp, 2))
+                    continue
+
+                # Stock flat or lower — re-place order
+                new_entry = round(current_ltp * 0.997, 2)
+                self._log.info(f'{sym}: second chance — stock flat/lower {scan_ltp:.1f} -> {current_ltp:.1f}, new entry {new_entry:.1f}')
+
+                try:
+                    new_order_id = self._broker.sell(sym, p['qty'], price=new_entry,
+                                                     order_type='LIMIT', product='INTRADAY')
+                    p['order_id'] = new_order_id
+                    p['entry_price'] = new_entry
+                    audit('anomaly', 'SECOND_CHANCE_ORDER', sym,
+                          scan_ltp=round(scan_ltp, 2), current_ltp=round(current_ltp, 2),
+                          new_entry=new_entry, order_id=new_order_id)
+                except Exception as e:
+                    self._log.error(f'{sym}: second chance order failed: {e}')
+                    self._fm.release(p['trade_id'], pnl=0)
+                    continue
+
+            # Wait 5 min for second chance fills
+            for wait_round in range(10):
+                time.sleep(30)
+                all_done = True
+                for p in second_chance:
+                    if p.get('filled') or not p.get('order_id'):
+                        continue
+                    filled, fill_price = self._broker.order_filled(p['order_id'])
+                    if filled:
+                        p['filled'] = True
+                        p['fill_price'] = fill_price
+                        self._log.info(f'{p["sym"]}: SECOND CHANCE filled after {(wait_round+1)*30}s')
+                    else:
+                        all_done = False
+                if all_done:
+                    break
+
+            # Process second chance results
+            for p in second_chance:
+                sym = p['sym']
+                s = p['signal']
+
+                if not p.get('filled'):
+                    try:
+                        self._broker.cancel(p['order_id'])
+                    except Exception:
+                        pass
+                    self._log.info(f'{sym}: second chance no fill — released')
+                    self._fm.release(p['trade_id'], pnl=0)
+                    audit('anomaly', 'SECOND_CHANCE_NO_FILL', sym)
+                    continue
+
+                # Get actual fill
+                actual_qty = p['qty']
+                actual_price = p['fill_price'] if p['fill_price'] > 0 else p['entry_price']
+                try:
+                    book = self._broker._api.get_order_book() or []
+                    for o in book:
+                        if o.get('id') == p['order_id'] or o.get('order_id') == p['order_id']:
+                            tq = int(o.get('traded_qty', 0) or 0)
+                            if tq > 0: actual_qty = tq
+                            tp = o.get('traded_price', 0)
+                            if tp and float(tp) > 0: actual_price = float(tp)
+                            break
+                except Exception:
+                    pass
+
+                if actual_qty <= 0:
+                    self._fm.release(p['trade_id'], pnl=0)
+                    continue
+
+                sl_price = round(actual_price * (1 + SL_PCT / 100), 2)
+
+                self._positions.open(
+                    symbol=sym, side=Side.SELL, qty=actual_qty,
+                    entry_price=actual_price, order_id=p['order_id'],
+                    strategy=self.name, sl=sl_price,
+                    trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
+                    trade_id=p['trade_id'],
+                )
+
+                is_reentry = sym in self._entered
+                self._entered.add(sym)
+
+                audit('anomaly', 'SECOND_CHANCE_ENTRY', sym,
+                      side='SHORT', qty=actual_qty, entry=round(actual_price, 2),
+                      sl=round(sl_price, 2), scan_ltp=round(p['_scan_ltp'], 2),
+                      score=s['anomaly_score'], residual=round(s['residual'], 1))
+
+                self._log.info(f'SECOND CHANCE SHORT {sym} filled={actual_qty} @ {actual_price:.1f} SL={sl_price:.1f}')
 
     def _fetch_market_lens(self):
         """Fetch all stocks from NSE Market Lens."""
