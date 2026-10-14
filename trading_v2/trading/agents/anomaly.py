@@ -388,18 +388,14 @@ class AnomalyAgent(BaseAgent):
 
             try:
                 entry_price = round(live_ltp * 0.998, 2)  # 0.2% below = thesis confirmation
-                sl_trigger = round(entry_price * (1 + SL_PCT / 100), 2)
-                sl_limit = round(sl_trigger * 1.002, 2)  # 0.2% above trigger = fill buffer
-                result = self._broker.sell_smart(sym, qty, limit_price=entry_price,
-                                                 sl_trigger=sl_trigger, sl_limit=sl_limit)
-                order_id = result['parent']
-                sl_order_id = result.get('child', '')
+                order_id = self._broker.sell(sym, qty, price=entry_price,
+                                             order_type='LIMIT', product='INTRADAY')
                 pending.append({
                     'sym': sym, 'qty': qty, 'entry_price': entry_price,
-                    'order_id': order_id, 'sl_order_id': sl_order_id,
-                    'trade_id': trade_id, 'margin': margin, 'signal': s,
+                    'order_id': order_id, 'trade_id': trade_id,
+                    'margin': margin, 'signal': s,
                 })
-                self._log.info(f'ORDER PLACED: SHORT {sym} qty={qty} @ {entry_price:.1f} SL_ORDER={sl_order_id}')
+                self._log.info(f'ORDER PLACED: SHORT {sym} qty={qty} @ {entry_price:.1f}')
             except Exception as e:
                 self._log.error(f'{sym}: order failed: {e}')
                 self._fm.release(trade_id, pnl=0)
@@ -547,17 +543,13 @@ class AnomalyAgent(BaseAgent):
                 self._log.info(f'{sym}: second chance — stock flat/lower {scan_ltp:.1f} -> {current_ltp:.1f}, new entry {new_entry:.1f}')
 
                 try:
-                    sc_sl_trigger = round(new_entry * (1 + SL_PCT / 100), 2)
-                    sc_sl_limit = round(sc_sl_trigger * 1.002, 2)
-                    sc_result = self._broker.sell_smart(sym, p['qty'], limit_price=new_entry,
-                                                        sl_trigger=sc_sl_trigger, sl_limit=sc_sl_limit)
-                    new_order_id = sc_result['parent']
+                    new_order_id = self._broker.sell(sym, p['qty'], price=new_entry,
+                                                     order_type='LIMIT', product='INTRADAY')
                     p['order_id'] = new_order_id
-                    p['sl_order_id'] = sc_result.get('child', '')
                     p['entry_price'] = new_entry
                     audit('anomaly', 'SECOND_CHANCE_ORDER', sym,
                           scan_ltp=round(scan_ltp, 2), current_ltp=round(current_ltp, 2),
-                          new_entry=new_entry, order_id=new_order_id, sl_order=p['sl_order_id'])
+                          new_entry=new_entry, order_id=new_order_id)
                 except Exception as e:
                     self._log.error(f'{sym}: second chance order failed: {e}')
                     self._fm.release(p['trade_id'], pnl=0)
