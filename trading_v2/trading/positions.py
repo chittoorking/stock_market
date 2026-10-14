@@ -92,6 +92,13 @@ class PositionManager:
             except Exception as e:
                 log.warning(f'{pos.symbol}: broker position check failed ({e}), proceeding with exit')
 
+        # Cancel exchange GTTs before software exit (prevent ghost long)
+        for _gtt_id in [getattr(pos, "gtt_sl_id", ""), getattr(pos, "gtt_target_id", "")]:
+            if _gtt_id:
+                try:
+                    self._broker._api.cancel_trigger_order(_gtt_id)
+                except Exception:
+                    pass
         # Sell FIRST — don't remove position until confirmed
         sell_ok = True
         if not skip_sell:
@@ -220,6 +227,9 @@ class PositionManager:
                     'qty': pos.qty, 'entry_price': pos.entry_price,
                     'order_id': pos.order_id, 'strategy': pos.strategy,
                     'sl': pos.sl, 'target': pos.target,
+                    'gtt_sl_id': pos.gtt_sl_id,
+                    'gtt_target_id': pos.gtt_target_id,
+                    'gtt_target_pct': pos.gtt_target_pct,
                     'trail_activate_pct': pos.trail_activate_pct,
                     'trail_pct': pos.trail_pct, 'peak_price': pos.peak_price,
                     'trail_active': pos.trail_active,
@@ -243,6 +253,9 @@ class PositionManager:
                     qty=d['qty'], entry_price=d['entry_price'],
                     order_id=d['order_id'], strategy=d['strategy'],
                     sl=d.get('sl', 0), target=d.get('target', 0),
+                    gtt_sl_id=d.get('gtt_sl_id', ''),
+                    gtt_target_id=d.get('gtt_target_id', ''),
+                    gtt_target_pct=d.get('gtt_target_pct', 5.0),
                     trail_activate_pct=d.get('trail_activate_pct', 0),
                     trail_pct=d.get('trail_pct', 0),
                     peak_price=d.get('peak_price', d['entry_price']),

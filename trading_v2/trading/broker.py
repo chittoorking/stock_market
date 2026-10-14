@@ -109,6 +109,34 @@ class Broker:
         audit('broker', 'SMART_BUY_OK', sym, qty=qty, parent=result.get('parent',''), child=result.get('child',''))
         return result
 
+    def place_gtt(self, sym: str, qty: int, side: str,
+                  trigger: float, limit: float) -> str:
+        """Place exchange-side GTT order. Returns order id or empty string."""
+        self._check_sym(sym)
+        audit("broker", "GTT_SUBMIT", sym, qty=qty, side=side, trigger=trigger)
+        oid = self._api.place_trigger_order(sym, qty, side, trigger, limit)
+        if not oid:
+            audit("broker", "GTT_FAILED", sym)
+            return ""
+        audit("broker", "GTT_OK", sym, order_id=oid, trigger=trigger)
+        return oid
+
+    def modify_gtt(self, order_id: str, trigger: float, limit: float) -> bool:
+        """Modify GTT trigger price (for trailing SL or extending target)."""
+        if not order_id:
+            return False
+        ok = self._api.modify_trigger_order(order_id, trigger, limit)
+        audit("broker", "GTT_MODIFY", order_id=order_id, trigger=trigger, ok=ok)
+        return ok
+
+    def cancel_gtt(self, order_id: str) -> bool:
+        """Cancel a GTT order."""
+        if not order_id:
+            return True
+        ok = self._api.cancel_trigger_order(order_id)
+        audit("broker", "GTT_CANCEL", order_id=order_id, ok=ok)
+        return ok
+
     def cancel_smart(self, order_id: str):
         """Cancel smart order (SL leg)."""
         try:

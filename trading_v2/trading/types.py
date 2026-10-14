@@ -70,6 +70,9 @@ class Position:
     fno_margin: float = 0
     fno_sec_id: str = ''
     trade_id: str = ''         # fund manager ID
+    gtt_sl_id: str = ''        # exchange GTT SL order id
+    gtt_target_id: str = ''    # exchange GTT target order id
+    gtt_target_pct: float = 5.0  # current target % (extends as price moves)
     opened_at: str = field(default_factory=lambda: datetime.now().strftime('%H:%M:%S'))
     # Exit fields (set on close)
     closed: bool = False

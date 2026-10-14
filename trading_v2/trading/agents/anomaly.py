@@ -34,6 +34,7 @@ from collections import defaultdict
 from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import audit, get_logger, tg_alert
+from live.indmoney_client import tick_round
 from trading.services import price_tracker
 
 log = get_logger('anomaly')
@@ -497,6 +498,19 @@ class AnomalyAgent(BaseAgent):
                 trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                 trade_id=trade_id,
             )
+            # -- Exchange GTTs: SL at +2%, target at -5% (trailing target)
+            _sl_trigger  = tick_round(actual_price * 1.02)
+            _sl_limit    = tick_round(_sl_trigger * 1.001)
+            _tgt_trigger = tick_round(actual_price * 0.95)
+            _tgt_limit   = tick_round(_tgt_trigger * 0.999)
+            _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
+            _gtt_tgt_id  = self._broker.place_gtt(sym, actual_qty, 'BUY', _tgt_trigger, _tgt_limit)
+            _pos = self._positions.get(sym)
+            if _pos:
+                _pos.gtt_sl_id      = _gtt_sl_id
+                _pos.gtt_target_id  = _gtt_tgt_id
+                _pos.gtt_target_pct = 5.0
+            # ------------------------------------------------------------------
             is_reentry = sym in self._entered
             self._entered.add(sym)
             audit('anomaly', 'RE_ENTRY' if is_reentry else 'ENTRY', sym,
@@ -618,6 +632,19 @@ class AnomalyAgent(BaseAgent):
                     trail_activate_pct=TRAIL_ACTIVATE, trail_pct=TRAIL_PCT,
                     trade_id=p['trade_id'],
                 )
+            # -- Exchange GTTs: SL at +2%, target at -5% (trailing target)
+            _sl_trigger  = tick_round(actual_price * 1.02)
+            _sl_limit    = tick_round(_sl_trigger * 1.001)
+            _tgt_trigger = tick_round(actual_price * 0.95)
+            _tgt_limit   = tick_round(_tgt_trigger * 0.999)
+            _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
+            _gtt_tgt_id  = self._broker.place_gtt(sym, actual_qty, 'BUY', _tgt_trigger, _tgt_limit)
+            _pos = self._positions.get(sym)
+            if _pos:
+                _pos.gtt_sl_id      = _gtt_sl_id
+                _pos.gtt_target_id  = _gtt_tgt_id
+                _pos.gtt_target_pct = 5.0
+            # ------------------------------------------------------------------
 
                 is_reentry = sym in self._entered
                 self._entered.add(sym)
