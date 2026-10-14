@@ -386,7 +386,7 @@ class AnomalyAgent(BaseAgent):
                 continue
 
             try:
-                entry_price = round(live_ltp * 0.997, 2)  # 0.3% below = thesis confirmation
+                entry_price = round(live_ltp * 0.998, 2)  # 0.2% below = thesis confirmation
                 order_id = self._broker.sell(sym, qty, price=entry_price,
                                              order_type='LIMIT', product='INTRADAY')
                 pending.append({
@@ -537,7 +537,7 @@ class AnomalyAgent(BaseAgent):
                     continue
 
                 # Stock flat or lower — re-place order
-                new_entry = round(current_ltp * 0.997, 2)
+                new_entry = round(current_ltp * 0.998, 2)
                 self._log.info(f'{sym}: second chance — stock flat/lower {scan_ltp:.1f} -> {current_ltp:.1f}, new entry {new_entry:.1f}')
 
                 try:
