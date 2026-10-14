@@ -77,6 +77,7 @@ def get_prev_data(sym: str) -> dict:
             'atr': atr, 'rsi': rsi, 'bb': bb,
             'two_red': 1 if (c[i] < o[i] and c[i-1] < o[i-1]) else 0,
             'open_below': (1 if today_open and today_open < c[i] else 0) if today_open else None,
+            'open_above': (1 if today_open and today_open > c[i] else 0) if today_open else None,
             'prev5_ret': (c[i]-c[i-5])/c[i-5]*100 if abs(i) <= len(c)-5 else None,
         }
     except Exception as e:
