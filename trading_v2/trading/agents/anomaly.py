@@ -3,7 +3,7 @@
 Thesis: small-cap stocks that gap up without institutional support revert intraday.
 
 Entry 1 — 9:20 scan (fake gap detection):
-  Filters: score >= 5, residual 5-13, gain > 4%, price >= 50,
+  Filters: score >= 5, residual 5-13, not(dlv>80 AND ocf>50), gain > 4%, price >= 50,
            150 Cr <= mcap < 1000 Cr, 1M < 35%, circuit > entry + 2.5%
   Skip: openPrice = 0 (stock not yet opened)
   Sort: highest score, then highest residual
@@ -214,6 +214,9 @@ class AnomalyAgent(BaseAgent):
             # Circuit filter: skip if upper circuit < entry + 2.5% (SL can't fill before circuit)
             candidates = [s for s in candidates
                           if s.get('upper_circuit', 9999) > s['ltp'] * 1.025]
+            # Block if BOTH high delivery AND high OCF (institutional buying + strong cash flow = real gap)
+            candidates = [s for s in candidates
+                          if not (s.get("dlv", 0) > 80 and s.get("ocf", 0) > 50)]
             # Skip multi-day momentum: 10%+ gain in prior 4 days = circuit continuation
             candidates = [s for s in candidates
                           if (s.get('wk', 0) - s.get('gain_from_prev', 0)) < 10]
