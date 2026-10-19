@@ -3,7 +3,7 @@
 Thesis: small-cap stocks that gap up without institutional support revert intraday.
 
 Entry 1 — 9:20 scan (fake gap detection):
-  Filters: score >= 5, residual 2-13, gain > 4%, price >= 50,
+  Filters: score >= 5, residual 5-13, gain > 4%, price >= 50,
            150 Cr <= mcap < 1000 Cr, 1M < 35%, circuit > entry + 2.5%
   Skip: openPrice = 0 (stock not yet opened)
   Sort: highest score, then highest residual
@@ -199,7 +199,7 @@ class AnomalyAgent(BaseAgent):
             # 9:20: gain>4% + residual<=13 + anomaly_score>=5
             candidates = [s for s in stocks
                           if s['anomaly_score'] >= MIN_ANOMALY_SCORE
-                          and s['residual'] > 2
+                          and s["residual"] >= 5
                           and s['residual'] <= 13
                           and not self._positions.find_by_symbol(s['ticker'])
                           and s['ticker'] not in self._sl_hit
