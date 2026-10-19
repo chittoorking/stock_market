@@ -334,28 +334,29 @@ class AnomalyAgent(BaseAgent):
         # Place all orders at once, then wait and check fills
         self._place_and_fill(to_trade)
 
-        # Check for SL hits — block re-entry for those tickers
-        for sym in list(self._entered):
-            if not self._positions.find_by_symbol(sym):
-                # Position closed. Check if it was SL by reading audit
-                try:
-                    from pathlib import Path
-                    import json as _json
-                    today = datetime.now().strftime('%Y%m%d')
-                    audit_file = Path(__file__).parent.parent.parent.parent / 'live' / 'logs' / f'audit_{today}.jsonl'
-                    if audit_file.exists():
-                        for line in open(audit_file):
-                            r = _json.loads(line)
-                            if (r.get('symbol') == sym and
-                                r.get('action') == 'EXIT' and
-                                r.get('reason') == 'SL_HIT' and
-                                r.get('component') == 'monitor'):
-                                self._sl_hit.add(sym)
-                                self._log.info(f'{sym}: SL hit — blocked from re-entry')
-                                tg_alert(f'SL HIT {sym} — blocked from re-entry')
-                                break
-                except Exception:
-                    pass
+        # Check for SL hits -- block re-entry for those tickers
+        # Scan today's audit for ANY closed position (SL_HIT or GTT_FIRED)
+        try:
+            from pathlib import Path
+            import json as _json
+            today = datetime.now().strftime('%Y%m%d')
+            audit_file = Path(__file__).parent.parent.parent.parent / 'live' / 'logs' / f'audit_{today}.jsonl'
+            if audit_file.exists():
+                for line in open(audit_file):
+                    try:
+                        r = _json.loads(line)
+                    except Exception:
+                        continue
+                    if (r.get('component') == 'monitor'
+                            and r.get('action') == 'EXIT'
+                            and r.get('reason') in ('SL_HIT', 'GTT_FIRED')):
+                        sym = r.get('symbol', '')
+                        if sym and sym not in self._sl_hit:
+                            self._sl_hit.add(sym)
+                            self._log.info(f'{sym}: {r["reason"]} today -- blocked from re-entry')
+                            tg_alert(f'{r["reason"]} {sym} -- blocked from re-entry')
+        except Exception as e:
+            self._log.error(f'SL check failed: {e}')
 
     def _place_and_fill(self, candidates):
         """Place all SHORT orders at once, wait up to 5 min, check fills."""
