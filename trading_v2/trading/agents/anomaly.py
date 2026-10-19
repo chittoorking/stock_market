@@ -17,7 +17,7 @@ Entry 2 — 10:12 / 11:12 / 12:12 scans (confirmed fade):
 Entry 3 — 13:12 / 14:12 (PAPER mode, log only)
 
 Execution: LIMIT DAY at LTP * 0.998 (0.2% thesis confirmation), 5-min fill window, cancel unfilled.
-Exit: SL 2%, trail activate 1.5% / trail 0.5%, EOD 3:10 PM.
+Exit: SL 2%, trail activate 1.0% / trail 0.5%, EOD 3:10 PM.
 
 Anomaly score (0-8, all sector-relative):
   +1 residual > 3%    +1 residual > 5%    +1 volatility > 1.3x
@@ -51,7 +51,7 @@ ENTRY_TIMES = [
 
 MAX_TRADES = 10
 SL_PCT = 2.0
-TRAIL_ACTIVATE = 1.5
+TRAIL_ACTIVATE = 1.0
 TRAIL_PCT = 0.5
 MIN_ANOMALY_SCORE = 5
 MIN_PRICE = 50
