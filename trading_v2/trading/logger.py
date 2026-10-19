@@ -71,7 +71,7 @@ def audit(component: str, action: str, symbol: str = '', **kw):
     _root.getChild(component).info(f'{action} | {symbol} | {detail}')
 
     # Log ML 94 fields for signal events
-    if symbol and any(tag in action for tag in ['ENTRY', 'SIGNAL', 'TAKE', 'SCORE', 'TRADE']):
+    if symbol and any(tag in action for tag in ['ENTRY', 'SIGNAL', 'TAKE', 'SCORE', 'TRADE', 'CANDIDATE', 'SKIP', 'PAPER']):
         try:
             global _ml_enricher
             if _ml_enricher is None:
