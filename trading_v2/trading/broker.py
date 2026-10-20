@@ -74,7 +74,25 @@ class Broker:
         audit('broker', 'FNO_BUY', sym, qty=qty, sec_id=sec_id)
         oid = self._api.place_fno_order(sym, qty, 'BUY', sec_id, order_type='MARKET')
         if not oid:
-            raise BrokerError(f'FnO BUY {sym}: returned None')
+            # Order may have filled despite None return -- check FNO positions
+            import time; time.sleep(2)
+            try:
+                import requests as _req
+                from live.indmoney_client import headers as _hdrs
+                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=fno&product=intraday',
+                              headers=_hdrs(), timeout=10)
+                if _r.status_code == 200:
+                    _data = _r.json().get('data', {})
+                    _pos = _data if isinstance(_data, list) else _data.get('net_positions', [])
+                    for _p in _pos:
+                        if str(_p.get('security_id','')) == str(sec_id) and abs(_p.get('net_qty',0)) > 0:
+                            oid = str(_p.get('order_id', '')) or 'FNO-VERIFIED'
+                            log.warning(f'FnO BUY {sym}: API returned None but position found at broker')
+                            audit('broker', 'FNO_BUY_VERIFIED', sym, order_id=oid, sec_id=sec_id)
+                            return oid
+            except Exception as _e:
+                log.warning(f'FnO verify failed: {_e}')
+            raise BrokerError(f'FnO BUY {sym}: returned None and no position at broker')
         audit('broker', 'FNO_BUY_OK', sym, order_id=oid)
         return oid
 
@@ -82,7 +100,25 @@ class Broker:
         audit('broker', 'FNO_SELL', sym, qty=qty, sec_id=sec_id)
         oid = self._api.place_fno_order(sym, qty, 'SELL', sec_id, order_type='MARKET')
         if not oid:
-            raise BrokerError(f'FnO SELL {sym}: returned None')
+            # Order may have filled despite None return -- check FNO positions
+            import time; time.sleep(2)
+            try:
+                import requests as _req
+                from live.indmoney_client import headers as _hdrs
+                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=fno&product=intraday',
+                              headers=_hdrs(), timeout=10)
+                if _r.status_code == 200:
+                    _data = _r.json().get('data', {})
+                    _pos = _data if isinstance(_data, list) else _data.get('net_positions', [])
+                    for _p in _pos:
+                        if str(_p.get('security_id','')) == str(sec_id) and abs(_p.get('net_qty',0)) > 0:
+                            oid = str(_p.get('order_id', '')) or 'FNO-VERIFIED'
+                            log.warning(f'FnO SELL {sym}: API returned None but position found at broker')
+                            audit('broker', 'FNO_SELL_VERIFIED', sym, order_id=oid, sec_id=sec_id)
+                            return oid
+            except Exception as _e:
+                log.warning(f'FnO verify failed: {_e}')
+            raise BrokerError(f'FnO SELL {sym}: returned None and no position at broker')
         audit('broker', 'FNO_SELL_OK', sym, order_id=oid)
         return oid
 
