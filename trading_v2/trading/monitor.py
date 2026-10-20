@@ -71,6 +71,12 @@ class Monitor:
                         break
                     # Still have positions — force close with wider price
                     log.warning(f'EOD: broker still has {len(open_pos)} positions, attempt {verify_attempt+2}')
+                    # Re-fetch to avoid acting on stale data
+                    broker_pos2 = get_positions() or []
+                    open_pos = [p for p in broker_pos2 if abs(p.get('net_qty', 0)) > 0]
+                    if not open_pos:
+                        log.info('EOD: broker now clear after re-check')
+                        break
                     for bp in open_pos:
                         sym = bp.get('symbol', '')
                         qty = abs(bp.get('net_qty', 0))
