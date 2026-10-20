@@ -117,6 +117,20 @@ class Monitor:
         try:
             from live.indmoney_client import get_positions as _get_pos
             _broker_pos = _get_pos() or []
+            # Also fetch FNO positions -- options/futures use segment=fno
+            try:
+                import requests as _req
+                from live.indmoney_client import headers as _hdrs
+                _fno_r = _req.get('https://api.indstocks.com/portfolio/positions?segment=fno&product=intraday',
+                                  headers=_hdrs(), timeout=10)
+                if _fno_r.status_code == 200:
+                    _fno_data = _fno_r.json().get('data', {})
+                    if isinstance(_fno_data, list):
+                        _broker_pos.extend(_fno_data)
+                    elif isinstance(_fno_data, dict):
+                        _broker_pos.extend(_fno_data.get('net_positions', []))
+            except Exception:
+                pass
             _live_syms = {
                 p['symbol'] for p in _broker_pos
                 if abs(p.get('net_qty', 0)) > 0
