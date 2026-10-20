@@ -376,10 +376,8 @@ class AnomalyAgent(BaseAgent):
             if live_ltp <= 0:
                 live_ltp = ltp
 
-            available = self._fm.available
-            current_active = len([p for p in self._positions.active()
-                                    if p.strategy == self.name])
-            per_trade = available / max(1, MAX_TRADES - current_active)
+            # Fixed position size: pool / MAX_TRADES -- uniform risk per trade
+            per_trade = self._fm.pool / MAX_TRADES
             qty = int(per_trade * 5 / live_ltp)
             if qty < 1:
                 self._log.info(f'{sym}: qty=0, insufficient funds')

@@ -212,7 +212,9 @@ class NewsOrbAgent(BaseAgent):
 
             # Position sizing
             available = self._fm.available
-            qty = int(available * 5 / live_ltp / max(1, len(confirmed)))
+            # Fixed position size: pool / 10 -- uniform risk, cap per trade
+            per_trade = self._fm.pool / 10
+            qty = int(per_trade * 5 / live_ltp)
             if qty < 1:
                 continue
 
