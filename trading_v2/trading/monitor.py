@@ -121,7 +121,7 @@ class Monitor:
             try:
                 import requests as _req
                 from live.indmoney_client import headers as _hdrs
-                _fno_r = _req.get('https://api.indstocks.com/portfolio/positions?segment=fno&product=intraday',
+                _fno_r = _req.get('https://api.indstocks.com/portfolio/positions?segment=derivative&product=intraday',
                                   headers=_hdrs(), timeout=10)
                 if _fno_r.status_code == 200:
                     _fno_data = _fno_r.json().get('data', {})
@@ -136,7 +136,7 @@ class Monitor:
                 if abs(p.get('net_qty', 0)) > 0
             }
             for _rpos in list(active):
-                if _rpos.symbol not in _live_syms and not _rpos.closed:
+                if _rpos.symbol not in _live_syms and not _rpos.closed and not getattr(_rpos, "fno_sec_id", ""):
                     # Try actual GTT fill price from order book first
                     _fill_price = 0.0
                     try:
@@ -249,27 +249,37 @@ class Monitor:
                     return
 
         # Trailing target: extend BUY LIMIT when profit within 1% of current target
-        # Cancel old limit order, place new one at extended price
+        # FIXED: track last extend level to prevent order stacking
         if getattr(pos, 'gtt_target_id', '') and getattr(pos, 'gtt_target_pct', 0) > 0:
             _entry = pos.entry_price
             if _entry and _entry > 0:
-                _profit_pct = (_entry - price) / _entry * 100  # SHORT: positive when price falls
+                _profit_pct = (_entry - price) / _entry * 100
                 _tgt_pct = pos.gtt_target_pct
-                if _profit_pct >= _tgt_pct - 1.0:
-                    _new_tgt_pct   = _tgt_pct + 0.5
+                _last_ext = getattr(pos, '_last_extend_pct', 0)
+                # Only extend if we crossed a NEW threshold (not same one again)
+                if _profit_pct >= _tgt_pct - 1.0 and _tgt_pct != _last_ext:
+                    _new_tgt_pct = _tgt_pct + 0.5
                     _new_tgt_price = tick_round(_entry * (1 - _new_tgt_pct / 100))
+                    # Mark as extended FIRST to prevent re-trigger on next tick
+                    pos._last_extend_pct = _tgt_pct
+                    # Cancel old order
+                    _old_id = pos.gtt_target_id
                     try:
-                        self._broker._api.cancel_order(pos.gtt_target_id)
-                    except Exception:
-                        pass
+                        self._broker._api.cancel_order(_old_id)
+                    except Exception as _ce:
+                        log.warning('Target cancel failed ' + pos.symbol + ': ' + str(_ce))
+                    # Place new order
                     _new_oid = self._broker.buy(pos.symbol, pos.qty,
                                                 price=_new_tgt_price, order_type='LIMIT')
                     if _new_oid:
                         audit('monitor', 'TARGET_LIMIT_EXTEND', pos.symbol,
                               old_tgt=_tgt_pct, new_tgt=_new_tgt_pct,
                               price=round(_new_tgt_price, 2))
-                        pos.gtt_target_id  = _new_oid
+                        pos.gtt_target_id = _new_oid
                         pos.gtt_target_pct = _new_tgt_pct
+                    else:
+                        # Buy failed -- keep old target, do NOT retry
+                        log.error('Target extend BUY failed ' + pos.symbol)
 
     def _exit(self, pos_id: str, exit_price: float = 0, reason: str = 'MANUAL'):
         pos = self._pos.close(pos_id, exit_price=exit_price, reason=reason)

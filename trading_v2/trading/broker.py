@@ -79,7 +79,7 @@ class Broker:
             try:
                 import requests as _req
                 from live.indmoney_client import headers as _hdrs
-                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=fno&product=intraday',
+                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=derivative&product=intraday',
                               headers=_hdrs(), timeout=10)
                 if _r.status_code == 200:
                     _data = _r.json().get('data', {})
@@ -105,7 +105,7 @@ class Broker:
             try:
                 import requests as _req
                 from live.indmoney_client import headers as _hdrs
-                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=fno&product=intraday',
+                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=derivative&product=intraday',
                               headers=_hdrs(), timeout=10)
                 if _r.status_code == 200:
                     _data = _r.json().get('data', {})
