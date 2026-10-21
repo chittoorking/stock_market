@@ -145,8 +145,8 @@ class Monitor:
                         _broker_pos.extend(_fno_data)
                     elif isinstance(_fno_data, dict):
                         _broker_pos.extend(_fno_data.get('net_positions', []))
-            except Exception:
-                pass
+            except Exception as _fe:
+                log.warning("FNO positions fetch failed: " + str(_fe))
             _live_syms = {
                 p['symbol'] for p in _broker_pos
                 if abs(p.get('net_qty', 0)) > 0

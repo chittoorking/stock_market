@@ -459,8 +459,8 @@ class AnomalyAgent(BaseAgent):
             # Cancel any unfilled remainder
             try:
                 self._broker.cancel(p['order_id'])
-            except Exception:
-                pass
+            except Exception as _ce:
+                self._log.warning(f"{sym}: cancel remainder failed: {_ce}")
 
             # Get actual filled qty
             actual_qty = p['qty']
