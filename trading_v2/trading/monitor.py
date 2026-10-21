@@ -200,6 +200,24 @@ class Monitor:
         self._pos.update_peak(pos.id, price)
 
         # SL
+        # Dynamic SL tightening: once +0.25% profit, tighten SL from 2% to 1%
+        # Only for anomaly strategy (pullback reversal trades)
+        if pos.strategy == 'anomaly' and not getattr(pos, '_sl_tightened', False):
+            if move >= 0.25:
+                new_sl_pct = 1.0
+                if pos.side == Side.BUY:
+                    new_sl = pos.entry_price * (1 - new_sl_pct / 100)
+                    if new_sl > pos.sl:  # only tighten, never widen
+                        pos.sl = new_sl
+                        pos._sl_tightened = True
+                        audit('monitor', 'SL_TIGHTEN', pos.symbol, old_pct=2.0, new_pct=new_sl_pct, move=round(move, 2))
+                else:
+                    new_sl = pos.entry_price * (1 + new_sl_pct / 100)
+                    if new_sl < pos.sl:  # only tighten, never widen
+                        pos.sl = new_sl
+                        pos._sl_tightened = True
+                        audit('monitor', 'SL_TIGHTEN', pos.symbol, old_pct=2.0, new_pct=new_sl_pct, move=round(move, 2))
+
         if pos.sl > 0:
             if (pos.side == Side.BUY and price <= pos.sl) or \
                (pos.side == Side.SELL and price >= pos.sl):
