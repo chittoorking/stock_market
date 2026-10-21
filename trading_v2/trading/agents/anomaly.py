@@ -443,6 +443,7 @@ class AnomalyAgent(BaseAgent):
                 scan_ltp = p['signal']['ltp']  # LTP at scan time
                 p['_second_chance'] = True
                 p['_scan_ltp'] = scan_ltp
+                self._entered.add(sym)  # block re-entry even on no-fill
                 audit('anomaly', 'NO_FILL', sym, order_id=p['order_id'])
                 continue
 
@@ -598,9 +599,10 @@ class AnomalyAgent(BaseAgent):
                     try:
                         self._broker.cancel(p['order_id'])
                     except Exception:
-                        pass
+                        self._log.warning(f'{sym}: cancel on no-fill may have failed')
                     self._log.info(f'{sym}: second chance no fill — released')
                     self._fm.release(p['trade_id'], pnl=0)
+                    self._entered.add(sym)  # block re-entry even on second chance no-fill
                     audit('anomaly', 'SECOND_CHANCE_NO_FILL', sym)
                     continue
 
