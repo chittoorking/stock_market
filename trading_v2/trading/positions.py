@@ -96,12 +96,16 @@ class PositionManager:
         # Cancel SL GTT trigger and target LIMIT order before software exit
         _sl_id = getattr(pos, 'gtt_sl_id', '')
         if _sl_id:
-            try: self._broker._api.cancel_trigger_order(_sl_id)
-            except Exception: pass
+            try:
+                self._broker._api.cancel_trigger_order(_sl_id)
+            except Exception as _e:
+                log.warning(f'{pos.symbol}: GTT SL cancel failed: {_e}')
         _tgt_id = getattr(pos, 'gtt_target_id', '')
         if _tgt_id:
-            try: self._broker._api.cancel_order(_tgt_id)
-            except Exception: pass
+            try:
+                self._broker._api.cancel_order(_tgt_id)
+            except Exception as _e:
+                log.warning(f'{pos.symbol}: target LIMIT cancel failed: {_e}')
         # Sell FIRST — don't remove position until confirmed
         sell_ok = True
         if not skip_sell:
@@ -233,6 +237,9 @@ class PositionManager:
                     'gtt_sl_id': pos.gtt_sl_id,
                     'gtt_target_id': pos.gtt_target_id,
                     'gtt_target_pct': pos.gtt_target_pct,
+                    '_sl_tightened': getattr(pos, '_sl_tightened', False),
+                    '_opened_at': getattr(pos, '_opened_at', 0),
+                    '_last_extend_pct': getattr(pos, '_last_extend_pct', 0),
                     'trail_activate_pct': pos.trail_activate_pct,
                     'trail_pct': pos.trail_pct, 'peak_price': pos.peak_price,
                     'trail_active': pos.trail_active,
@@ -268,6 +275,9 @@ class PositionManager:
                     opened_at=d.get('opened_at', ''),
                 )
                 self._positions[pos.id] = pos
+                pos._sl_tightened = d.get("_sl_tightened", False)
+                pos._opened_at = d.get("_opened_at", 0)
+                pos._last_extend_pct = d.get("_last_extend_pct", 0)
                 # Update counter to avoid ID collisions
                 parts = pos.id.rsplit('_', 1)
                 if len(parts) == 2 and parts[1].isdigit():

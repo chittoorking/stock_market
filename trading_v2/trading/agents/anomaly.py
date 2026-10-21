@@ -439,13 +439,22 @@ class AnomalyAgent(BaseAgent):
                 except Exception as e:
                     self._log.warning(f'{sym}: cancel failed: {e}')
 
-                # Second chance: wait until 30 min from scan, retry if stock flat/lower
-                scan_ltp = p['signal']['ltp']  # LTP at scan time
-                p['_second_chance'] = True
-                p['_scan_ltp'] = scan_ltp
-                self._entered.add(sym)  # block re-entry even on no-fill
-                audit('anomaly', 'NO_FILL', sym, order_id=p['order_id'])
-                continue
+                # Verify cancel -- order may have filled during cancel
+                import time as _t; _t.sleep(1)
+                _late_fill, _late_price = self._broker.order_filled(p['order_id'])
+                if _late_fill:
+                    self._log.warning(f'{sym}: order filled AFTER cancel attempt!')
+                    p['filled'] = True
+                    p['fill_price'] = _late_price
+                    # Don't continue -- fall through to fill processing below
+                else:
+                    # Second chance: wait until 30 min from scan, retry if stock flat/lower
+                    scan_ltp = p['signal']['ltp']  # LTP at scan time
+                    p['_second_chance'] = True
+                    p['_scan_ltp'] = scan_ltp
+                    self._entered.add(sym)  # block re-entry even on no-fill
+                    audit('anomaly', 'NO_FILL', sym, order_id=p['order_id'])
+                    continue
 
             # Cancel any unfilled remainder
             try:
@@ -572,7 +581,7 @@ class AnomalyAgent(BaseAgent):
                     continue
 
             # Wait 5 min for second chance fills
-            for wait_round in range(30):
+            for wait_round in range(10):  # 10 x 30s = 5 min
                 time.sleep(30)
                 all_done = True
                 for p in second_chance:

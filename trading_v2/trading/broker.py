@@ -111,14 +111,16 @@ class Broker:
                     _data = _r.json().get('data', {})
                     _pos = _data if isinstance(_data, list) else _data.get('net_positions', [])
                     for _p in _pos:
-                        if str(_p.get('security_id','')) == str(sec_id) and abs(_p.get('net_qty',0)) > 0:
+                        # For SELL: position should be net_qty < 0 (short) or net_qty == 0 (closed)
+                        # If net_qty is still positive, sell didn't work
+                        if str(_p.get('security_id','')) == str(sec_id) and _p.get('net_qty', 0) <= 0:
                             oid = str(_p.get('order_id', '')) or 'FNO-VERIFIED'
-                            log.warning(f'FnO SELL {sym}: API returned None but position found at broker')
+                            log.warning(f'FnO SELL {sym}: API returned None but sell confirmed at broker')
                             audit('broker', 'FNO_SELL_VERIFIED', sym, order_id=oid, sec_id=sec_id)
                             return oid
             except Exception as _e:
                 log.warning(f'FnO verify failed: {_e}')
-            raise BrokerError(f'FnO SELL {sym}: returned None and no position at broker')
+            raise BrokerError(f'FnO SELL {sym}: returned None and sell not confirmed at broker')
         audit('broker', 'FNO_SELL_OK', sym, order_id=oid)
         return oid
 
@@ -255,7 +257,7 @@ class Broker:
                 candles = data if isinstance(data, list) else data.get('candles', [])
                 return candles
         except Exception as e:
-            self._log.warning(f'Candles {sym}: {e}')
+            log.warning(f'Candles {sym}: {e}')
         return []
 
     def get_vwap(self, sym: str) -> float:
