@@ -79,7 +79,7 @@ def audit(component: str, action: str, symbol: str = '', **kw):
                 _ml_enricher = log_signal_with_ml
             _ml_enricher(component, action, symbol, **kw)
         except Exception:
-            pass
+            pass  # logger/telegram - non-critical, intentionally silent
 
 
 def tg_alert(msg):
@@ -89,4 +89,4 @@ def tg_alert(msg):
         _r.post('https://api.telegram.org/bot8831033342:AAGstfFaVjPPvSykkCwfQIS9O8iYujqHivs/sendMessage',
                 json={'chat_id': '866752968', 'text': msg}, timeout=5)
     except Exception:
-        pass
+        pass  # logger/telegram - non-critical, intentionally silent

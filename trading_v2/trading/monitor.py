@@ -63,8 +63,8 @@ class Monitor:
                             try:
                                 self._broker._api.cancel_order(str(_oid))
                                 log.info('EOD: cancelled pending order ' + str(_oid))
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                log.warning(f'Silent error in monitor.py: {_exc} | context: log.info(EOD: cancelled pending order  + str(_oid))')
             except Exception as _e:
                 log.warning('EOD: order cancel sweep failed: ' + str(_e))
 

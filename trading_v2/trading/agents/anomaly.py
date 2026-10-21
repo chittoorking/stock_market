@@ -476,8 +476,8 @@ class AnomalyAgent(BaseAgent):
                         if tp and float(tp) > 0:
                             actual_price = float(tp)
                         break
-            except Exception:
-                pass
+            except Exception as _exc:
+                self._log.warning(f'Silent error in anomaly.py: {_exc} | context: break')
 
             if actual_qty <= 0:
                 self._log.info(f'{sym}: filled qty=0')
@@ -627,8 +627,8 @@ class AnomalyAgent(BaseAgent):
                             tp = o.get('traded_price', 0)
                             if tp and float(tp) > 0: actual_price = float(tp)
                             break
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    self._log.warning(f'Silent error in anomaly.py: {_exc} | context: break')
 
                 if actual_qty <= 0:
                     self._fm.release(p['trade_id'], pnl=0)

@@ -150,8 +150,8 @@ class PositionManager:
                         json={'chat_id': '866752968',
                               'text': f'EXIT FAILED: {pos.symbol} qty={pos.qty} — close manually NOW to avoid auto-square penalty!'},
                         timeout=5)
-                except:
-                    pass
+                except Exception as _exc:
+                    log.warning(f'Silent error in positions.py: {_exc} | context: timeout=5)')
 
         # Get actual fill price from order book
         if sell_ok and not skip_sell:
@@ -167,8 +167,8 @@ class PositionManager:
                             exit_price = float(_tp)
                             log.info(f'EXIT FILL PRICE: {pos.symbol} @ {exit_price}')
                         break
-            except Exception:
-                pass
+            except Exception as _exc:
+                log.warning(f'Silent error in positions.py: {_exc} | context: break')
 
         # NOW remove from tracking (whether sell worked or not — avoid infinite retry loop)
         with self._lock:
