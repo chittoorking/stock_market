@@ -52,6 +52,22 @@ class Monitor:
 
         # EOD 3:10 PM — close everything, verify with broker
         if now.hour > 15 or (now.hour == 15 and now.minute >= 10):
+            # Cancel ALL pending orders first — prevent stale orders filling next day
+            try:
+                _book = self._broker._api.get_order_book() or []
+                for _o in _book:
+                    _st = str(_o.get('status', '')).upper()
+                    if _st in ('PENDING', 'OPEN', 'CREATED', 'INITIATED'):
+                        _oid = _o.get('id', _o.get('order_id', ''))
+                        if _oid:
+                            try:
+                                self._broker._api.cancel_order(str(_oid))
+                                log.info('EOD: cancelled pending order ' + str(_oid))
+                            except Exception:
+                                pass
+            except Exception as _e:
+                log.warning('EOD: order cancel sweep failed: ' + str(_e))
+
             active = self._pos.active()
             if active:
                 log.info(f'EOD: closing {len(active)} positions')
