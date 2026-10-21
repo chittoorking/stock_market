@@ -135,8 +135,19 @@ class Monitor:
                 p['symbol'] for p in _broker_pos
                 if abs(p.get('net_qty', 0)) > 0
             }
+            # Also build set of live security_ids for FNO matching
+            _live_sec_ids = {
+                str(p.get('security_id', '')) for p in _broker_pos
+                if abs(p.get('net_qty', 0)) > 0
+            }
             for _rpos in list(active):
-                if _rpos.symbol not in _live_syms and not _rpos.closed and not getattr(_rpos, "fno_sec_id", ""):
+                # For FNO: match by security_id. For equity: match by symbol.
+                _is_fno = bool(getattr(_rpos, 'fno_sec_id', ''))
+                if _is_fno:
+                    _alive = str(getattr(_rpos, 'fno_sec_id', '')) in _live_sec_ids
+                else:
+                    _alive = _rpos.symbol in _live_syms
+                if not _alive and not _rpos.closed:
                     # Try actual GTT fill price from order book first
                     _fill_price = 0.0
                     try:
