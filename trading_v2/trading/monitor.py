@@ -147,7 +147,10 @@ class Monitor:
                     _alive = str(getattr(_rpos, 'fno_sec_id', '')) in _live_sec_ids
                 else:
                     _alive = _rpos.symbol in _live_syms
-                if not _alive and not _rpos.closed:
+                # Grace period: skip recon for first 60s after open (API may not reflect yet)
+                import time as _tm
+                _age = _tm.time() - getattr(_rpos, "_opened_at", 0)
+                if not _alive and not _rpos.closed and _age > 60:
                     # Try actual GTT fill price from order book first
                     _fill_price = 0.0
                     try:

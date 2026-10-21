@@ -42,6 +42,7 @@ class PositionManager:
                            entry_price=entry_price, order_id=order_id,
                            strategy=strategy, peak_price=entry_price, **kw)
             self._positions[pid] = pos
+            import time as _t; pos._opened_at = _t.time()
 
         audit('positions', 'OPEN', symbol, pos_id=pid, side=side.value,
               qty=qty, entry=entry_price, order_id=order_id, strategy=strategy)
