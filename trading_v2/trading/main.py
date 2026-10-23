@@ -68,6 +68,7 @@ def main():
     monitor = Monitor(broker, positions, fm, poll_interval=args.poll)
     monitor.start()
 
+
     # Agents
     loaded = []
     for name in args.agents:

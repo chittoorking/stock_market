@@ -339,3 +339,54 @@ def score_futures(signal: dict, fd: dict) -> int:
     log.info(f'FUT {signal.get("symbol","")}: conv={score} '
              f'(sl={sl_pct:.1f}% d={dow} h={hour} {action} tgt={tgt_pct:.1f}% p={entry_price:.0f})')
     return score
+
+
+# ── MCX Commodity scoring (5 dimensions, 0-10) ──────────────────────
+
+def score_mcx_commodity(signal: dict, fd: dict) -> int:
+    """Silver+Gold MCX futures. 90% WR at >= 4 on 289 trades."""
+    score = 0
+    entry_price = float(fd.get('entryPrice', signal.get('entry_price', 0)) or 0)
+    sl = float(fd.get('stopLoss', fd.get('sl', 0)) or 0)
+    sym = str(signal.get('symbol', '')).upper()
+    target_pct = 0
+    try:
+        target_pct = float(str(fd.get('target_pct', fd.get('targetPercent', signal.get('target_pct', 0)))).replace('%', ''))
+    except Exception:
+        pass
+
+    # 1. SL DISTANCE (0-3) — sweet spot is 0.3-2.0%
+    sl_pct = abs(entry_price - sl) / entry_price * 100 if entry_price > 0 and sl > 0 else 0
+    if 0.3 <= sl_pct <= 1.0:
+        score += 3  # 92% WR on Silver
+    elif 1.0 < sl_pct <= 2.0:
+        score += 2  # 88% WR
+    elif 0.2 <= sl_pct < 0.3:
+        score += 1  # 82% WR
+    # < 0.2% or > 2.0% = 0 (losers)
+
+    # 2. COMMODITY TYPE (0-4) — Silver only, reject everything else
+    if 'SILVER' in sym:
+        score += 4  # Silver with trail = 90% WR
+    # Gold/Crude/NatGas = 0 (will fail threshold)
+
+    # 3. TARGET (0-2)
+    if 0 < target_pct <= 1.0:
+        score += 2  # 91% WR, quick targets
+    elif 1.0 < target_pct <= 2.0:
+        score += 1  # 85% WR
+
+    # 4. ENTRY HOUR (0-2)
+    hour = datetime.now().hour
+    if 16 <= hour <= 19:
+        score += 2  # evening session 81-88% WR, biggest profits
+    elif 11 <= hour <= 15:
+        score += 1  # day session 77-81% WR
+
+    # 5. ACTION ALIGNMENT (0-1)
+    action = str(fd.get('action', signal.get('action', 'BUY'))).upper()
+    if 'SILVER' in sym and action == 'BUY':
+        score += 1  # Silver BUY = 90% WR vs SELL 74%
+
+    log.info(f'MCX {sym}: conv={score} (sl={sl_pct:.2f}% tgt={target_pct:.1f}% h={hour} {action})')
+    return score

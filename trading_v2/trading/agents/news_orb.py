@@ -147,6 +147,10 @@ class NewsOrbAgent(BaseAgent):
                 dlv_base = bl['dlv']
                 direction = bl['direction']
 
+                if direction not in ('BUY', 'SELL'):
+                    self._log.warning(f'{sym}: invalid direction {direction}, skipping')
+                    continue
+
                 if ltp_base <= 0:
                     continue
 
@@ -208,7 +212,8 @@ class NewsOrbAgent(BaseAgent):
 
             live_ltp = self._broker.ltp_safe(sym)
             if live_ltp <= 0:
-                live_ltp = conf['entry_price']
+                self._log.warning(f'{sym}: no live price, skipping')
+                continue
 
             # Position sizing
             available = self._fm.available
@@ -225,7 +230,8 @@ class NewsOrbAgent(BaseAgent):
 
             try:
                 if direction == 'BUY':
-                    order_id = self._broker.buy(sym, qty)
+                    order_id = self._broker.buy(sym, qty, price=round(live_ltp * 1.001, 2),
+                                                order_type='LIMIT', product='INTRADAY')
                 else:
                     order_id = self._broker.sell(sym, qty, price=round(live_ltp * 0.999, 2),
                                                  order_type='LIMIT', product='INTRADAY')
@@ -234,27 +240,61 @@ class NewsOrbAgent(BaseAgent):
                     self._fm.release(trade_id, pnl=0)
                     continue
 
+                # Wait for fill
+                import time as _t
+                _t.sleep(5)
+                _filled, _fill_price = self._broker.order_filled(order_id)
+                if not _filled:
+                    # Wait 10 more seconds
+                    _t.sleep(10)
+                    _filled, _fill_price = self._broker.order_filled(order_id)
+                if not _filled:
+                    self._log.warning(f'{sym}: order not filled, cancelling')
+                    try:
+                        self._broker.cancel(order_id)
+                    except Exception:
+                        pass
+                    self._fm.release(trade_id, 0)
+                    continue
+                actual_entry = _fill_price if _fill_price > 0 else live_ltp
+
                 sl_pct = 2.0
                 if direction == 'BUY':
-                    sl = round(live_ltp * (1 - sl_pct / 100), 2)
+                    sl = round(actual_entry * (1 - sl_pct / 100), 2)
                 else:
-                    sl = round(live_ltp * (1 + sl_pct / 100), 2)
+                    sl = round(actual_entry * (1 + sl_pct / 100), 2)
 
                 self._positions.open(
                     symbol=sym,
                     side=Side.BUY if direction == 'BUY' else Side.SELL,
-                    qty=qty, entry_price=live_ltp, order_id=order_id,
+                    qty=qty, entry_price=actual_entry, order_id=order_id,
                     strategy=self.name, sl=sl,
                     trail_activate_pct=1.0, trail_pct=0.5,
                     trade_id=trade_id,
                 )
 
                 audit('news_orb', 'CONFIRMED_ENTRY', sym,
-                      side=direction, qty=qty, entry=round(live_ltp, 2),
+                      side=direction, qty=qty, entry=round(actual_entry, 2),
                       sl=round(sl, 2), price_chg=round(conf['price_chg'], 2),
                       dlv_chg=round(conf['dlv_chg'], 1))
 
-                self._log.info(f'ENTRY {direction} {sym} qty={qty} @ {live_ltp:.1f} SL={sl:.1f}')
+                self._log.info(f'ENTRY {direction} {sym} qty={qty} @ {actual_entry:.1f} SL={sl:.1f}')
+
+                # Place GTT SL at exchange
+                from live.indmoney_client import tick_round
+                if direction == 'BUY':
+                    _sl_trigger = tick_round(sl)
+                    _sl_limit = tick_round(sl * 0.995)  # 0.5% below trigger
+                    _gtt_side = 'SELL'
+                else:
+                    _sl_trigger = tick_round(sl)
+                    _sl_limit = tick_round(sl * 1.005)  # 0.5% above trigger
+                    _gtt_side = 'BUY'
+                try:
+                    _gtt_id = self._broker.place_gtt_sl(sym, _gtt_side, _sl_trigger, _sl_limit, qty)
+                    self._log.info(f'{sym}: GTT SL placed @ {_sl_trigger} -> {_gtt_id}')
+                except Exception as _e:
+                    self._log.warning(f'{sym}: GTT SL failed: {_e}')
 
             except Exception as e:
                 self._log.error(f'{sym}: order failed: {e}')

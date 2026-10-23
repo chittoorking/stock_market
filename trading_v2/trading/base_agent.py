@@ -55,6 +55,11 @@ class BaseAgent:
                 qty -= base_lot
                 margin = entry * qty * 0.15 if is_futures else entry * qty
                 self._log.info(f'{req.symbol}: scaling down to {qty} (avail=Rs {avail:,.0f})')
+            # Ensure qty is multiple of lot size (MCX requires exact multiples)
+            if req.fno_lot_size > 0 and qty % req.fno_lot_size != 0:
+                qty = (qty // req.fno_lot_size) * req.fno_lot_size
+                if qty < req.fno_lot_size:
+                    qty = req.fno_lot_size  # minimum 1 lot
         else:
             sl = req.sl if req.sl > 0 else entry * 0.97
             qty = self._fm.calc_equity_qty(entry, sl)

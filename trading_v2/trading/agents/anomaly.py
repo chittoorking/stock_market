@@ -512,7 +512,7 @@ class AnomalyAgent(BaseAgent):
             )
             # -- Exchange orders: SL = GTT TRIGGER, Target = BUY LIMIT
             _sl_trigger  = tick_round(actual_price * 1.02)
-            _sl_limit    = tick_round(_sl_trigger * 1.001)
+            _sl_limit    = tick_round(_sl_trigger * 1.005)
             _tgt_price   = tick_round(actual_price * 0.95)
             _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
             _lmt_tgt_id  = self._broker.buy(sym, actual_qty, price=_tgt_price, order_type='LIMIT')  # BUY LIMIT for target
@@ -592,6 +592,16 @@ class AnomalyAgent(BaseAgent):
                         p['filled'] = True
                         p['fill_price'] = fill_price
                         self._log.info(f'{p["sym"]}: SECOND CHANCE filled after {(wait_round+1)*30}s')
+                        # IMMEDIATE GTT SL for second chance fill
+                        _fill_price = fill_price if fill_price > 0 else p['entry_price']
+                        _sc_sl_trigger = tick_round(_fill_price * 1.02)
+                        _sc_sl_limit = tick_round(_sc_sl_trigger * 1.005)
+                        try:
+                            _gtt_id = self._broker.place_gtt(p['sym'], p['qty'], 'BUY', _sc_sl_trigger, _sc_sl_limit)
+                            p['gtt_sl_id'] = _gtt_id
+                            self._log.info(f'{p["sym"]}: second chance GTT SL placed immediately @ {_sc_sl_trigger}')
+                        except Exception as _e:
+                            self._log.warning(f'{p["sym"]}: second chance GTT SL failed: {_e}')
                     else:
                         all_done = False
                 if all_done:
@@ -609,6 +619,22 @@ class AnomalyAgent(BaseAgent):
                         self._broker.cancel(p['order_id'])
                     except Exception:
                         self._log.warning(f'{sym}: cancel on no-fill may have failed')
+                    # Check if order filled during cancel (race condition)
+                    import time as _t; _t.sleep(1)
+                    _late_fill, _late_price = self._broker.order_filled(p['order_id'])
+                    if _late_fill:
+                        self._log.warning(f'{sym}: second chance order filled AFTER cancel!')
+                        p['filled'] = True
+                        p['fill_price'] = _late_price
+                        # Place immediate GTT SL
+                        _sc_sl = tick_round(_late_price * 1.02)
+                        _sc_sl_lim = tick_round(_sc_sl * 1.005)
+                        try:
+                            _gtt_id = self._broker.place_gtt(sym, p['qty'], 'BUY', _sc_sl, _sc_sl_lim)
+                            p['gtt_sl_id'] = _gtt_id
+                        except Exception:
+                            pass
+                        continue  # Don't release capital - position is live
                     self._log.info(f'{sym}: second chance no fill — released')
                     self._fm.release(p['trade_id'], pnl=0)
                     self._entered.add(sym)  # block re-entry even on second chance no-fill
@@ -636,6 +662,16 @@ class AnomalyAgent(BaseAgent):
 
                 sl_price = round(actual_price * (1 + SL_PCT / 100), 2)
 
+                # Check for duplicate position
+                if self._positions.find_by_symbol(sym):
+                    self._log.warning(f'{sym}: already have position, skipping second chance')
+                    # Cancel GTT if placed
+                    if p.get('gtt_sl_id'):
+                        try: self._broker.cancel_gtt(p['gtt_sl_id'])
+                        except: pass
+                    self._fm.release(p.get('trade_id', ''), 0)
+                    continue
+
                 _opened_pos = self._positions.open(
                     symbol=sym, side=Side.SELL, qty=actual_qty,
                     entry_price=actual_price, order_id=p['order_id'],
@@ -645,7 +681,7 @@ class AnomalyAgent(BaseAgent):
                 )
                 # -- Exchange orders: SL = GTT TRIGGER, Target = BUY LIMIT
                 _sl_trigger  = tick_round(actual_price * 1.02)
-                _sl_limit    = tick_round(_sl_trigger * 1.001)
+                _sl_limit    = tick_round(_sl_trigger * 1.005)
                 _tgt_price   = tick_round(actual_price * 0.95)
                 _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
                 _lmt_tgt_id  = self._broker.buy(sym, actual_qty, price=_tgt_price, order_type='LIMIT')  # BUY LIMIT for target

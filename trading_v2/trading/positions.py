@@ -69,7 +69,8 @@ class PositionManager:
                 import requests as _req
                 from live.indmoney_client import headers as _headers
                 is_fno = bool(getattr(pos, 'fno_sec_id', ''))
-                segment = 'fno' if is_fno else 'equity'
+                _mcx = any(m in pos.symbol.upper() for m in ('SILVERM', 'GOLDM', 'CRUDEOILM', 'NATURALGAS', 'NATGASMINI'))
+                segment = 'commodity' if _mcx else ('derivative' if is_fno else 'equity')
                 _r = _req.get(f'https://api.indstocks.com/portfolio/positions?segment={segment}&product=intraday',
                              headers=_headers(), timeout=10)
                 broker_pos = []
@@ -79,8 +80,10 @@ class PositionManager:
                         broker_pos = _data
                     elif isinstance(_data, dict):
                         broker_pos = _data.get('net_positions', [])
+                _sec_id = str(getattr(pos, 'fno_sec_id', ''))
                 has_position = any(
-                    p.get('symbol', '') == pos.symbol and abs(p.get('net_qty', 0)) > 0
+                    (str(p.get('security_id', '')) == _sec_id if _sec_id else p.get('symbol', '') == pos.symbol)
+                    and abs(p.get('net_qty', 0)) > 0
                     for p in broker_pos
                 )
                 if not has_position:

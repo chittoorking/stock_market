@@ -70,6 +70,12 @@ class Broker:
     def buy_limit(self, sym: str, qty: int, price: float) -> str:
         return self.buy(sym, qty, price=price, order_type='LIMIT')
 
+    # MCX commodity prefixes for segment detection
+    _MCX_PREFIXES = ('GOLD', 'SILVER', 'CRUDE', 'NATURAL', 'COPPER', 'ZINC', 'LEAD', 'ALUMIN', 'NICKEL')
+
+    def _is_mcx(self, sym: str) -> bool:
+        return sym.upper().startswith(self._MCX_PREFIXES)
+
     def buy_fno(self, sym: str, qty: int, sec_id: str) -> str:
         audit('broker', 'FNO_BUY', sym, qty=qty, sec_id=sec_id)
         oid = self._api.place_fno_order(sym, qty, 'BUY', sec_id, order_type='MARKET')
@@ -79,7 +85,9 @@ class Broker:
             try:
                 import requests as _req
                 from live.indmoney_client import headers as _hdrs
-                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=derivative&product=intraday',
+                _seg = 'commodity' if self._is_mcx(sym) else 'derivative'
+                _prod = 'intraday' if self._is_mcx(sym) else 'intraday'
+                _r = _req.get(f'https://api.indstocks.com/portfolio/positions?segment={_seg}&product={_prod}',
                               headers=_hdrs(), timeout=10)
                 if _r.status_code == 200:
                     _data = _r.json().get('data', {})
@@ -105,7 +113,8 @@ class Broker:
             try:
                 import requests as _req
                 from live.indmoney_client import headers as _hdrs
-                _r = _req.get('https://api.indstocks.com/portfolio/positions?segment=derivative&product=intraday',
+                _seg = 'commodity' if self._is_mcx(sym) else 'derivative'
+                _r = _req.get(f'https://api.indstocks.com/portfolio/positions?segment={_seg}&product=intraday',
                               headers=_hdrs(), timeout=10)
                 if _r.status_code == 200:
                     _data = _r.json().get('data', {})

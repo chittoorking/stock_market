@@ -197,6 +197,25 @@ def resolve_mcx_sec_id(sym: str, broker=None) -> str:
     """Resolve MCX futures symbol to sec_id from instrument master."""
     instruments = _load_mcx()
 
+    # Normalize Multyfi format: SILVERM26NOV-FUT -> extract base + month
+    # Then match to MCX format: SILVERM 30 Nov Fut
+    sym_clean = sym.replace('-', '').strip()
+    import re as _re
+    # Pattern: SILVERM26NOVFUT or SILVERM26Nov-FUT
+    m = _re.match(r'^([A-Z]+?)(\d{2})([A-Z]{3})(FUT)$', sym_clean, _re.IGNORECASE)
+    if m:
+        base_name = m.group(1).upper()  # SILVERM
+        month_str = m.group(3).capitalize()  # Nov
+        # Search instruments for base + month + Fut
+        for isym, data in instruments.items():
+            isym_upper = isym.upper()
+            if isym_upper.startswith(base_name + " ") and month_str.upper() in isym_upper and "FUT" in isym_upper:
+                # Make sure it is not an option (no CE/PE)
+                if 'CE' not in isym_upper and 'PE' not in isym_upper:
+                    sec_id = data['sec_id']
+                    log.info(f'MCX normalized {sym} -> {isym} -> sec_id={sec_id}')
+                    return sec_id
+
     # Direct match
     if sym in instruments:
         sec_id = instruments[sym]['sec_id']

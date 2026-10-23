@@ -1,3 +1,4 @@
+import os
 """Multyfi Options Agent — polls Multyfi API, scores signals, trades.
 
 Thin agent: delegates to services for API calls, scoring, symbol resolution.
@@ -24,6 +25,16 @@ class MulOptions(BaseAgent):
         super().__init__(broker, positions, fund_manager, monitor)
         self._creds = multyfi_api.load_creds()
         self._seen = set()
+        # Load persisted seen signals
+        self._seen_file = os.path.expanduser('~/multyfi_seen.json')
+        try:
+            import json as _json
+            with open(self._seen_file) as _f:
+                self._seen = set(_json.load(_f))
+        except Exception:
+            pass
+        if len(self._seen) > 500:
+            self._seen = set()  # fresh start — prevent unbounded growth
         self._seen_stream_ids = set()
         self._queued = []
 
@@ -95,6 +106,13 @@ class MulOptions(BaseAgent):
         if sig_key in self._seen:
             return
         self._seen.add(sig_key)
+        # Persist seen signals to survive restarts
+        try:
+            import json as _json
+            with open(self._seen_file, 'w') as _f:
+                _json.dump(list(self._seen), _f)
+        except Exception:
+            pass
 
         is_commodity = any(c in symbol for c in MCX_COMMODITIES)
 
@@ -106,8 +124,8 @@ class MulOptions(BaseAgent):
 
         # Score
         if is_commodity:
-            score = PE_MIN_SCORE
-            self._log.info(f'Commodity {symbol} {opt_type}: auto-score={score}')
+            # Commodity signals handled via _route_signal -> _handle_futures path only
+            return
         elif opt_type == 'PE':
             score = multyfi_scoring.score_pe(signal)
         else:
@@ -172,6 +190,13 @@ class MulOptions(BaseAgent):
         if sig_key in self._seen:
             return
         self._seen.add(sig_key)
+        # Persist seen signals
+        try:
+            import json as _j
+            with open(self._seen_file, 'w') as _f:
+                _j.dump(list(self._seen), _f)
+        except Exception:
+            pass
 
         # Pre-market queue
         now = datetime.now()
@@ -266,8 +291,8 @@ class MulOptions(BaseAgent):
         fut_sl = float(fd.get('stopLoss', fd.get('sl', 0)) or 0)
         action = str(fd.get('action', signal.get('action', 'BUY'))).upper()
 
-        # SL filter
-        if fut_sl > 0 and entry_price > 0:
+        # SL filter — MCX commodities have tighter SLs (0.2%), only filter NSE
+        if fut_sl > 0 and entry_price > 0 and not is_commodity:
             sl_pct = abs(entry_price - fut_sl) / entry_price * 100
             if sl_pct < 0.3:
                 self._log.info(f'SKIP {sym} futures: SL {sl_pct:.2f}% < 0.3%')
@@ -275,7 +300,8 @@ class MulOptions(BaseAgent):
 
         # Score
         if is_commodity:
-            score, threshold = PE_MIN_SCORE, PE_MIN_SCORE
+            score = multyfi_scoring.score_mcx_commodity(signal, fd)
+            threshold = 4  # 90% WR on Silver+Gold
         else:
             score = multyfi_scoring.score_futures(signal, fd)
             threshold = FUT_MIN_SCORE
@@ -286,18 +312,21 @@ class MulOptions(BaseAgent):
         if score < threshold:
             return
 
-        # MCX commodities: send Telegram alert instead of broker order
+        # MCX commodities: execute via INDmoney MCX API + send Telegram alert
         if is_commodity:
             try:
                 import requests as _req
-                msg = f'MULTYFI {action} {sym} @ {entry_price} SL={fut_sl} score={score}'
+                msg = f'MULTYFI MCX {action} {sym} @ {entry_price} SL={fut_sl}'
                 _req.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
                           json={'chat_id': TG_CHAT_ID, 'text': msg}, timeout=5)
                 self._log.info(f'TG ALERT: {msg}')
-                audit('multyfi', 'COMMODITY_ALERT', sym, action=action, entry=entry_price, sl=fut_sl, score=score)
             except Exception:
                 pass
-            return
+            # Use our own trail exit, not Multyfi's exit signal
+            signal['use_trail'] = True
+            signal['trail_be_trigger'] = 150  # ticks before breakeven SL
+            signal['trail_pct'] = 0.50  # trail at 50% of peak
+            # Fall through to broker execution below (don't return)
 
         # Resolve sec_id — ALWAYS use numeric sec_id from instrument master
         instrument = fd.get('instrument', fd.get('stockSymbol', ''))
@@ -334,10 +363,16 @@ class MulOptions(BaseAgent):
         if lot_size > 0:
             self._log.info(f'{sym}: lot={lot_size} x{lot_mult} = {scaled_lot} (score={score})')
 
+        # Trail params differ: MCX commodity vs NSE futures
+        if is_commodity:
+            _trail_act, _trail_pct = 0.07, 50  # Silver MCX: activate at 150 ticks, trail 50%
+        else:
+            _trail_act, _trail_pct = 1.0, 0.5  # NSE futures: activate at 1% profit, trail 0.5% from peak
+
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
             entry=entry_price, sl=sl,
-            trail_activate_pct=10, trail_pct=10,  # breakeven floor at 10% profit
+            trail_activate_pct=_trail_act, trail_pct=_trail_pct,
             conviction=min(score // 3, 10),
             reason=f'multyfi futures {action} score={score} x{lot_mult}',
             is_fno=True, fno_sec_id=sec_id, fno_lot_size=scaled_lot, fno_margin=margin_req,
@@ -357,9 +392,10 @@ class MulOptions(BaseAgent):
             'action': action, 'instrument': instrument,
         }
 
-        # Score (skip if already scored in _handle_premium_item)
+        # Score — reject MCX commodity options (we only trade Silver futures)
         if is_commodity:
-            score = PE_MIN_SCORE
+            self._log.info(f'SKIP {sym} {opt_type}: commodity option (futures only)')
+            return
         elif opt_type == 'PE':
             score = multyfi_scoring.score_pe(sig)
         else:
@@ -403,7 +439,7 @@ class MulOptions(BaseAgent):
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
             entry=opt_premium, sl=sl_price,
-            trail_activate_pct=10, trail_pct=10,  # breakeven floor at 10% profit
+            trail_activate_pct=10, trail_pct=10,  # NSE options: activate at 10% profit, trail 10% from peak
             conviction=min(score // 3, 10),
             reason=f'multyfi {opt_type} {action} score={score} x{lot_mult}',
             is_fno=True, fno_sec_id=sec_id, fno_lot_size=scaled_lot,
