@@ -8,7 +8,7 @@ Entry 1 — 9:20 scan (fake gap detection):
   Skip: openPrice = 0 (stock not yet opened)
   Sort: highest score, then highest residual
 
-Entry 2 — 10:12 / 11:12 / 12:12 scans (confirmed fade):
+Entry 2 — 10:12 / 11:12 / 12:12 scans (confirmed fade, gap<=7%, residual>=0):
   Filters: gain 5-10%, pullback > 1%, below VWAP > 0.5%,
            delivery < 40%, OCF < 100, bounce < 2.5%,
            fr200 < 20%, 6M < 50%, circuit > entry + 2.5%
@@ -287,6 +287,16 @@ class AnomalyAgent(BaseAgent):
                 if prior_4d > 10:
                     audit('anomaly', 'SKIP_MOMENTUM', s['ticker'],
                           gain=round(gain, 1), wk=round(s.get('wk', 0), 1), prior_4d=round(prior_4d, 1))
+                    continue
+                # Gap <= 7%: if gap still holding 7%+ by now, it's real — don't fight it
+                if s.get('gap', 0) > 7:
+                    audit('anomaly', 'SKIP_GAP_TOO_HIGH', s['ticker'],
+                          gain=round(gain, 1), gap=round(s.get('gap', 0), 2))
+                    continue
+                # Residual >= 0: only short stocks that outperformed their sector
+                if s.get('residual', 0) < 0:
+                    audit('anomaly', 'SKIP_NEG_RESIDUAL', s['ticker'],
+                          gain=round(gain, 1), residual=round(s.get('residual', 0), 1))
                     continue
                 candidates.append(s)
             candidates.sort(key=lambda x: (-x['pullback'], -x['below_vwap']))
