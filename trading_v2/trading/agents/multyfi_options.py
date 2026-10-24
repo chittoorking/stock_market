@@ -19,7 +19,7 @@ from trading.config import (PE_MIN_SCORE, CE_MIN_SCORE, FUT_MIN_SCORE,
 
 class MulOptions(BaseAgent):
     name = 'multyfi_options'
-    PAPER_MODE = True  # Log signals but don't place orders
+    PAPER_MODE = False  # LIVE — consec+ha filter active  # Log signals but don't place orders
 
     def __init__(self, broker, positions, fund_manager, monitor):
         super().__init__(broker, positions, fund_manager, monitor)
