@@ -16,13 +16,18 @@ Exit: SL 2%, trail activate 0.5% / trail 0.5%, EOD 3:10 PM. (survival first)
 Status: 5W 0L on paper. Need 20+ confirmed trades before going live.
 """
 import math
+import json
 import time
 from datetime import datetime
+from pathlib import Path
 
 from trading.base_agent import BaseAgent
 from trading.types import Side
 from trading.services import rss, gemini, orb
 from trading.logger import audit
+
+_STATE_FILE = Path(__file__).parent.parent.parent.parent / 'live' / 'data' / 'news_orb_state.json'
+_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
 class NewsOrbAgent(BaseAgent):
@@ -54,15 +59,47 @@ class NewsOrbAgent(BaseAgent):
             time.sleep(wait)
 
     def _run_day(self):
-        """Single day flow: scan -> analyze -> OR -> filter -> limit -> fills."""
+        """Single day flow with crash recovery via state file."""
         now = datetime.now()
 
-        # Skip if past 12 PM (missed the confirmation window)
-        if now.hour >= 12:
-            self._log.info('Past 12 PM, skipping today')
-            return
         if now.weekday() >= 5:
             self._log.info('Weekend, skipping')
+            return
+
+        date_str = now.strftime('%Y-%m-%d')
+
+        # Check for saved state (crash recovery)
+        state = self._load_state()
+        if state:
+            step = state.get('step', '')
+            self._log.info(f'RECOVERED state: step={step}')
+
+            if step == 'waiting_confirmation':
+                baseline = state.get('baseline', {})
+                if baseline:
+                    self._log.info(f'Resuming with {len(baseline)} baselines')
+                    # Jump to confirmation check
+                    now = datetime.now()
+                    if now.hour < 11 or (now.hour == 11 and now.minute < 12):
+                        target = now.replace(hour=11, minute=12, second=0)
+                        wait = (target - now).total_seconds()
+                        if wait > 0:
+                            self._log.info(f'Waiting {wait:.0f}s for 11:12 confirmation')
+                            time.sleep(wait)
+                    # Restore trade data in baseline
+                    for sym in baseline:
+                        if 'trade' not in baseline[sym]:
+                            baseline[sym]['trade'] = {'nse_symbol': sym, 'projection': baseline[sym].get('projection', 0), 'prev_close': baseline[sym].get('prev_close', 0)}
+                    self._do_confirmation(baseline)
+                    self._clear_state()
+                    return
+            elif step == 'done':
+                self._log.info('Already traded today')
+                return
+
+        # Skip if past 12 PM (missed everything)
+        if now.hour >= 12:
+            self._log.info('Past 12 PM, skipping today')
             return
 
         # Wait until 9:05
@@ -72,7 +109,6 @@ class NewsOrbAgent(BaseAgent):
             self._log.info(f'Waiting {wait:.0f}s for 9:05 AM')
             time.sleep(wait)
 
-        date_str = datetime.now().strftime('%Y-%m-%d')
         self._log.info(f'=== NEWS SCAN {date_str} ===')
 
         # Phase 1: Fetch + analyze
@@ -80,6 +116,7 @@ class NewsOrbAgent(BaseAgent):
         if not trades:
             self._log.info('No trades found')
             audit("news_orb", "NO_TRADES")
+            self._save_state({'date': date_str, 'step': 'done'})
             return
 
         # Phase 2: Wait for OR window (9:15-9:30)
@@ -96,10 +133,11 @@ class NewsOrbAgent(BaseAgent):
         filtered = orb.apply_filters(trades, or_data)
         if not filtered:
             self._log.info('No trades passed ORB filters')
+            self._save_state({'date': date_str, 'step': 'done'})
             return
         self._log.info(f'{len(filtered)} trades passed filters')
 
-        # Phase 5: Record baseline at 9:20 for confirmation check
+        # Phase 5: Record baseline at 9:20
         baseline = {}
         for t in filtered:
             sym = t['nse_symbol']
@@ -112,6 +150,8 @@ class NewsOrbAgent(BaseAgent):
                         'dlv': ml.get('deliveryPercentage', 0),
                         'direction': t.get('call', t.get('direction', 'BUY')),
                         'trade': t,
+                        'projection': t.get('projection', 0),
+                        'prev_close': t.get('prev_close', 0),
                     }
                     self._log.info(f'BASELINE {sym}: LTP={baseline[sym]["ltp"]:.1f} Dlv={baseline[sym]["dlv"]:.0f}%')
             except Exception as e:
@@ -119,9 +159,19 @@ class NewsOrbAgent(BaseAgent):
 
         if not baseline:
             self._log.info('No baseline data')
+            self._save_state({'date': date_str, 'step': 'done'})
             return
 
-        # Phase 6: Wait until 11:12 for confirmation
+        # SAVE STATE — survives restart
+        self._save_state({
+            'date': date_str,
+            'step': 'waiting_confirmation',
+            'baseline': {sym: {k: v for k, v in bl.items() if k != 'trade'}
+                         for sym, bl in baseline.items()},
+        })
+        self._log.info(f'State saved: {len(baseline)} baselines')
+
+        # Phase 6: Wait until 11:12
         now = datetime.now()
         target = now.replace(hour=11, minute=12, second=0, microsecond=0)
         wait = (target - now).total_seconds()
@@ -129,7 +179,11 @@ class NewsOrbAgent(BaseAgent):
             self._log.info(f'Waiting {wait:.0f}s for 11:12 confirmation check')
             time.sleep(wait)
 
-        # Phase 7: Check confirmation — price + delivery both confirming
+        self._do_confirmation(baseline)
+        self._save_state({'date': date_str, 'step': 'done'})
+
+    def _do_confirmation(self, baseline):
+        """Phase 7+8: Check confirmation and enter trades."""
         confirmed = []
         for sym, bl in baseline.items():
             try:
@@ -312,6 +366,32 @@ class NewsOrbAgent(BaseAgent):
                 self._fm.release(trade_id, pnl=0)
 
         self._log.info('=== NEWS CONFIRMATION DONE ===')
+
+    def _save_state(self, state: dict):
+        """Save state to disk for crash recovery."""
+        try:
+            _STATE_FILE.write_text(json.dumps(state, default=str))
+        except Exception as e:
+            self._log.warning(f'State save failed: {e}')
+
+    def _load_state(self) -> dict:
+        """Load state from disk. Returns {} if no state or different day."""
+        try:
+            if _STATE_FILE.exists():
+                state = json.loads(_STATE_FILE.read_text())
+                if state.get('date') == datetime.now().strftime('%Y-%m-%d'):
+                    return state
+        except Exception:
+            pass
+        return {}
+
+    def _clear_state(self):
+        """Clear state file."""
+        try:
+            if _STATE_FILE.exists():
+                _STATE_FILE.unlink()
+        except Exception:
+            pass
 
     def _scan_and_analyze(self, date_str: str) -> list:
         """Fetch RSS, filter, analyze. No hard deadline — OR collection starts at 9:15 regardless."""
