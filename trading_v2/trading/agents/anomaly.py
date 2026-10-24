@@ -230,9 +230,15 @@ class AnomalyAgent(BaseAgent):
                 if s['ticker'] in self._sl_hit: continue
                 if s['ltp'] < MIN_PRICE: continue
                 # Only short weak fundamentals (OCF < 100)
-                if s.get("ocf", 0) >= 100:
+                # If OCF missing (0), block high-delivery stocks as safety
+                _ocf = s.get("ocf", 0) or 0
+                if _ocf >= 100:
                     audit("anomaly", "SKIP_HIGH_OCF", s["ticker"],
-                          gain=round(s.get("gain_from_prev", 0), 1), ocf=round(s.get("ocf", 0)))
+                          gain=round(s.get("gain_from_prev", 0), 1), ocf=round(_ocf))
+                    continue
+                if _ocf == 0 and s.get("dlv", 0) > 50:
+                    audit("anomaly", "SKIP_NO_OCF_HIGH_DLV", s["ticker"],
+                          gain=round(s.get("gain_from_prev", 0), 1), dlv=round(s.get("dlv", 0), 1))
                     continue
                 gain = s.get('gain_from_prev', 0)
                 if gain < 5 or gain > 10: continue
@@ -381,6 +387,14 @@ class AnomalyAgent(BaseAgent):
 
             if not self._broker.has_symbol(sym):
                 self._log.warning(f'{sym}: not in broker scrips')
+                continue
+
+            # Re-entry block: check right before ordering (catches SL fires between scans)
+            if sym in self._sl_hit:
+                self._log.info(f'{sym}: SL_HIT today — blocked at order time')
+                continue
+            if self._positions.find_by_symbol(sym):
+                self._log.info(f'{sym}: already have position — skip')
                 continue
 
             # Liquidity filter: skip illiquid stocks (can't exit cleanly)
