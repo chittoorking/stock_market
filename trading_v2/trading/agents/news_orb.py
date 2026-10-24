@@ -172,7 +172,18 @@ class NewsOrbAgent(BaseAgent):
                       dlv_base=round(dlv_base, 1), dlv_now=round(dlv_now, 1))
 
                 if price_confirms and dlv_confirms:
-                    self._log.info(f'CONFIRMED {sym} {direction}: price={price_chg:+.1f}% dlv={dlv_chg:+.0f}pp')
+                    # Check remaining move — skip if projection already exhausted
+                    projection = abs(float(bl['trade'].get('projection', 0) or 0))
+                    prev_close = bl['trade'].get('prev_close', 0) or ltp_base
+                    total_move = abs((ltp_now - prev_close) / prev_close * 100) if prev_close > 0 else 0
+                    remaining = projection - total_move
+                    if projection > 0 and remaining < 0.5:
+                        self._log.info(f'SKIP {sym}: move exhausted — projected={projection:.1f}% moved={total_move:.1f}% remaining={remaining:.1f}%')
+                        audit('news_orb', 'SKIP_EXHAUSTED', sym,
+                              projection=round(projection, 1), total_move=round(total_move, 1),
+                              remaining=round(remaining, 1))
+                        continue
+                    self._log.info(f'CONFIRMED {sym} {direction}: price={price_chg:+.1f}% dlv={dlv_chg:+.0f}pp remaining={remaining:.1f}%')
                     confirmed.append({
                         'sym': sym,
                         'direction': direction,
