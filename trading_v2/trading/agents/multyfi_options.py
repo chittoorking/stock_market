@@ -162,8 +162,17 @@ class MulOptions(BaseAgent):
                 sym = signal['symbol']
                 self._log.info(f'EXIT signal: {sym}')
                 audit('multyfi', 'EXIT_SIGNAL', sym)
-                tg_alert(f'MULTYFI EXIT SIGNAL: {sym}')
-                self._monitor.force_exit(sym, 'MULTYFI_EXIT', strategy=self.name)
+                # Check if we have a position and if trail is active
+                pos = self._positions.find_by_symbol(sym)
+                if pos and pos.trail_active:
+                    # Trail is managing exit — log but don't force exit
+                    self._log.info(f'{sym}: trail active, ignoring Multyfi EXIT (our trail handles it)')
+                    audit('multyfi', 'EXIT_IGNORED_TRAIL_ACTIVE', sym)
+                else:
+                    # Trail not active = stock hasn't moved our way — use Multyfi's exit
+                    self._log.info(f'{sym}: trail NOT active, using Multyfi EXIT')
+                    tg_alert(f'MULTYFI EXIT: {sym}')
+                    self._monitor.force_exit(sym, 'MULTYFI_EXIT', strategy=self.name)
 
         elif 'NEW' in msg and 'RECOMMENDATION' in msg:
             if action == 'MULTIPLE':
@@ -367,7 +376,7 @@ class MulOptions(BaseAgent):
         if is_commodity:
             _trail_act, _trail_pct = 0.07, 50  # Silver MCX: activate at 150 ticks, trail 50%
         else:
-            _trail_act, _trail_pct = 0.3, 0.3  # NSE futures: 97% WR with consec+ha filter
+            _trail_act, _trail_pct = 0.5, 0.5  # NSE futures: 96% WR, safer than 0.3% on live
 
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
