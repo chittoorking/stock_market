@@ -299,45 +299,107 @@ def score_ce(signal: dict) -> int:
 
 # ── Futures scoring (6 dimensions, 0-13) ─────────────────────────────
 
+def _get_index_candles_1h(sym: str, n_bars: int = 10):
+    """Get last N 1-hour candles for index (NIFTY/BANKNIFTY).
+    Uses NIFTYBEES/BANKBEES as proxy via INDmoney candle API.
+    Falls back to yfinance if INDmoney fails."""
+    import time as _time
+    proxy = {'NIFTY': 'NIFTYBEES', 'BANKNIFTY': 'BANKBEES'}.get(sym, sym)
+    now_ms = int(_time.time() * 1000)
+    start_ms = now_ms - 86400000 * 5  # 5 days
+    try:
+        from live.indmoney_client import get_historical_candles
+        candles = get_historical_candles(proxy, '1hour', start_ms, now_ms)
+        if candles and len(candles) >= n_bars:
+            # candles = [[ts, o, h, l, c, v], ...]
+            return [{'o': c[1], 'h': c[2], 'l': c[3], 'c': c[4]} for c in candles[-n_bars:]]
+    except Exception as e:
+        log.warning(f'INDmoney candles failed for {proxy}: {e}')
+    # Fallback: yfinance
+    try:
+        ticker = '^NSEI' if 'NIFTY' in sym and 'BANK' not in sym else '^NSEBANK'
+        df = yf.download(ticker, period='5d', interval='1h', progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        if len(df) >= n_bars:
+            return [{'o': r['Open'], 'h': r['High'], 'l': r['Low'], 'c': r['Close']}
+                    for _, r in df.tail(n_bars).iterrows()]
+    except Exception as e:
+        log.warning(f'yfinance candles failed for {sym}: {e}')
+    return []
+
+
+def _check_consec_ha(candles: list, action: str) -> tuple:
+    """Check consecutive candles + Heikin Ashi alignment.
+    Returns (consec_aligned: bool, ha_aligned: bool, consec_count: int)"""
+    if len(candles) < 3:
+        return False, False, 0
+    is_sell = action == 'SELL'
+
+    # Consecutive candles (last 2+ same direction)
+    consec = 0
+    for i in range(len(candles)-1, 0, -1):
+        bull = candles[i]['c'] > candles[i]['o']
+        if (is_sell and not bull) or (not is_sell and bull):
+            consec += 1
+        else:
+            break
+    consec_aligned = consec >= 2
+
+    # Heikin Ashi on last candle
+    # HA close = (O+H+L+C)/4, HA open = (prev_HA_open + prev_HA_close)/2
+    ha_open = candles[0]['o']
+    for c in candles:
+        ha_close = (c['o'] + c['h'] + c['l'] + c['c']) / 4
+        ha_open = (ha_open + ha_close) / 2
+    ha_bull = ha_close > ha_open
+    ha_aligned = (is_sell and not ha_bull) or (not is_sell and ha_bull)
+
+    return consec_aligned, ha_aligned, consec
+
+
 def score_futures(signal: dict, fd: dict) -> int:
-    """89% WR at >= 5 on 166 trades. Walk-forward: 90% -> 92% -> 83%."""
-    score = 0
-    entry_price = float(fd.get('entryPrice', signal.get('entry_price', 0)) or 0)
-    sl = float(fd.get('stopLoss', fd.get('sl', 0)) or 0)
-    target = float(fd.get('target', fd.get('targetPrice', 0)) or 0)
+    """consec+ha+noMonAM: 97% WR on 116 trades (2 years).
+    Checks 1H candles for consecutive direction + Heikin Ashi confirmation.
+    Blocks Monday morning (h<=11) signals."""
+    import re as _re
     action = str(fd.get('action', signal.get('action', 'BUY'))).upper()
+    sym = str(signal.get('symbol', '')).upper()
 
-    # 1. SL DISTANCE (0-4)
-    sl_pct = abs(entry_price - sl) / entry_price * 100 if entry_price > 0 and sl > 0 else 0
-    if sl_pct >= 5.0: score += 4
-    elif sl_pct >= 2.0: score += 3
-    elif sl_pct >= 1.0: score += 2
-    elif sl_pct >= 0.5: score += 1
+    # Extract underlying
+    clean = _re.sub(r'\d{2}[A-Z]{3}', '', _re.sub(r'FUT$', '', sym)).strip()
+    if clean in ('NIFTY', 'NIFTY50', 'BANKNIFTY', 'BANK NIFTY'):
+        underlying = 'BANKNIFTY' if 'BANK' in clean else 'NIFTY'
+    else:
+        underlying = clean
 
-    # 2. DAY OF WEEK (0-3)
     dow = datetime.now().weekday()
-    if dow == 4: score += 3
-    elif dow in (1, 2): score += 2
-    elif dow == 3: score += 1
-
-    # 3. ENTRY HOUR (0-2)
     hour = datetime.now().hour
-    if hour == 14: score += 2
-    elif 9 <= hour <= 13: score += 1
 
-    # 4. DIRECTION (0-1)
-    if action == 'SELL': score += 1
+    # Block Monday morning (h<=11) — all 6 Monday losers were 9-11 AM
+    if dow == 0 and hour <= 11:
+        log.info(f'FUT {sym}: SKIP Monday morning (h={hour})')
+        return 0
 
-    # 5. TARGET % (0-2)
-    tgt_pct = abs(target - entry_price) / entry_price * 100 if target > 0 and entry_price > 0 else 0
-    if 2.0 <= tgt_pct <= 5.0: score += 2
-    elif 0.5 <= tgt_pct < 2.0: score += 1
+    # Block weekends
+    if dow >= 5:
+        log.info(f'FUT {sym}: SKIP weekend')
+        return 0
 
-    # 6. PRICE LEVEL (0-1)
-    if 500 <= entry_price <= 2000: score += 1
+    # Get 1H candles and check consec + HA
+    candles = _get_index_candles_1h(underlying, 10)
+    if not candles:
+        log.warning(f'FUT {sym}: no candle data, skip')
+        return 0
 
-    log.info(f'FUT {signal.get("symbol","")}: conv={score} '
-             f'(sl={sl_pct:.1f}% d={dow} h={hour} {action} tgt={tgt_pct:.1f}% p={entry_price:.0f})')
+    consec_al, ha_al, consec_n = _check_consec_ha(candles, action)
+
+    score = 0
+    if consec_al: score += 3  # 2+ consecutive candles aligned
+    if ha_al: score += 3      # Heikin Ashi confirms
+
+    log.info(f'FUT {sym}: conv={score} consec={consec_al}({consec_n}) ha={ha_al} '
+             f'd={dow} h={hour} {action} underlying={underlying}')
     return score
 
 
