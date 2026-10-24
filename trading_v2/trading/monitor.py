@@ -232,13 +232,28 @@ class Monitor:
                     peak = pos.peak_price
                     if pos.side == Side.BUY:
                         drop = (price - peak) / peak * 100
+                        # Charge-adjusted floor: trail SL never below entry + charges/qty
+                        _charge_floor = entry + (195 / pos.qty) if pos.qty > 0 else entry
+                        _trail_sl = peak * (1 - pos.trail_pct / 100)
+                        if _trail_sl < _charge_floor:
+                            _trail_sl = _charge_floor
+                        if price <= _trail_sl:
+                            log.info('TRAIL_EXIT | %s | price=%.2f peak=%.2f trail_sl=%.2f (charge_floor=%.2f)',
+                                     pos.symbol, price, peak, _trail_sl, _charge_floor)
+                            self._exit(pos.id, price, 'TRAIL_EXIT')
+                            return
                     else:
                         drop = (peak - price) / peak * 100
-                    if drop <= -pos.trail_pct:
-                        log.info('TRAIL_EXIT | %s | price=%.2f peak=%.2f drop=%.2f%%',
-                                 pos.symbol, price, peak, drop)
-                        self._exit(pos.id, price, 'TRAIL_EXIT')
-                        return
+                        # Charge-adjusted floor: trail SL never above entry - charges/qty
+                        _charge_floor = entry - (195 / pos.qty) if pos.qty > 0 else entry
+                        _trail_sl = peak * (1 + pos.trail_pct / 100)
+                        if _trail_sl > _charge_floor:
+                            _trail_sl = _charge_floor
+                        if price >= _trail_sl:
+                            log.info('TRAIL_EXIT | %s | price=%.2f peak=%.2f trail_sl=%.2f (charge_floor=%.2f)',
+                                     pos.symbol, price, peak, _trail_sl, _charge_floor)
+                            self._exit(pos.id, price, 'TRAIL_EXIT')
+                            return
 
             # Trailing target extension (BUY LIMIT)
             if getattr(pos, 'gtt_target_id', '') and getattr(pos, 'gtt_target_pct', 0) > 0:
