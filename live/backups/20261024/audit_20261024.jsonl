@@ -1,0 +1,25 @@
+{"ts": "2026-10-24T17:04:14.911943", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T17:04:21.387763", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "SILVERM26NOV-FUT"}
+{"ts": "2026-10-24T17:04:22.826080", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T17:04:24.266128", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "CRUDEOIL26NOVFUT"}
+{"ts": "2026-10-24T17:10:15.085790", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T17:10:19.221583", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "SILVERM26NOV-FUT"}
+{"ts": "2026-10-24T17:10:20.637990", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T17:10:22.031375", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "CRUDEOIL26NOVFUT"}
+{"ts": "2026-10-24T17:57:44.188490", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T17:57:50.601950", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "SILVERM26NOV-FUT"}
+{"ts": "2026-10-24T17:57:52.166622", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T17:57:53.628987", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "CRUDEOIL26NOVFUT"}
+{"ts": "2026-10-24T18:04:42.025328", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T18:04:47.276744", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "SILVERM26NOV-FUT"}
+{"ts": "2026-10-24T18:04:48.747878", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T18:04:50.220992", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "CRUDEOIL26NOVFUT"}
+{"ts": "2026-10-24T18:25:13.591417", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T18:25:19.335658", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "SILVERM26NOV-FUT"}
+{"ts": "2026-10-24T18:25:20.820911", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T18:25:22.320010", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "CRUDEOIL26NOVFUT"}
+{"ts": "2026-10-24T18:43:15.589559", "component": "positions", "action": "OPEN", "symbol": "TESTSTOCK", "pos_id": "anomaly_1", "side": "SELL", "qty": 100, "entry": 150.0, "order_id": "TEST-001", "strategy": "anomaly"}
+{"ts": "2026-10-24T18:59:17.279968", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T18:59:23.870700", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "SILVERM26NOV-FUT"}
+{"ts": "2026-10-24T18:59:25.337693", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "GOLDM26NOV-FUT"}
+{"ts": "2026-10-24T18:59:27.837999", "component": "multyfi", "action": "EXIT_SIGNAL", "symbol": "CRUDEOIL26NOVFUT"}

@@ -376,7 +376,7 @@ class MulOptions(BaseAgent):
         if is_commodity:
             _trail_act, _trail_pct = 0.07, 50  # Silver MCX: activate at 150 ticks, trail 50%
         else:
-            _trail_act, _trail_pct = 0.5, 0.5  # NSE futures: 96% WR, safer than 0.3% on live
+            _trail_act, _trail_pct = 0.3, 0.3  # NSE futures: 97% WR with consec+ha
 
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,

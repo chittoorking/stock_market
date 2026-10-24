@@ -281,11 +281,25 @@ def compute_dashboard():
                 })
                 deployed_total += r.get('amount', 0)
 
-    # Pool
+    # Pool — pull live from trading server
     pool = 0
-    for r in records:
-        if r.get('action') == 'INIT' and r.get('component') == 'fm':
-            pool = r.get('pool', 0)
+    deployed_total = 0
+    try:
+        import requests as _rq
+        _status = _rq.get('http://localhost:8905/status', timeout=5).json()
+        pool = _status.get('pool', 0)
+        deployed_total = _status.get('deployed', 0)
+        positions = [
+            {'sym': p['sym'], 'side': p['side'], 'qty': p['qty'],
+             'entry': p['entry'], 'sl': p.get('sl', 0), 'strategy': p['strategy'],
+             'opened': p.get('opened', '')}
+            for p in _status.get('positions', [])
+        ]
+    except Exception:
+        # Fallback to audit log
+        for r in records:
+            if r.get('action') == 'DAILY_RESET' and r.get('component') == 'fm':
+                pool = r.get('pool', 0)
 
     # Token check
     token_ok = False

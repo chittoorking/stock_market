@@ -616,7 +616,7 @@ def place_fno_order(sym, qty, side, security_id, order_type='MARKET', price=0, p
     """Place FnO order. security_id must be the derivative instrument ID."""
     is_mcx = sym.upper().startswith(MCX_PREFIXES)
     exchange = 'MCX' if is_mcx else 'NSE'
-    segment = 'FNO' if is_mcx else 'DERIVATIVE'
+    segment = 'COMMODITY' if is_mcx else 'DERIVATIVE'
     # MCX commodities: INTRADAY (MIS) for day trades
     if is_mcx and product == 'MARGIN':
         product = 'INTRADAY'
