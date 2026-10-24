@@ -11,7 +11,7 @@ Timeline:
           AND delivery increased > 2pp from baseline
   11:12 — Enter confirmed trades (currently PAPER_MODE = False)
 
-Exit: SL 2%, trail activate 1% / trail 0.5%, EOD 3:10 PM.
+Exit: SL 2%, trail activate 0.5% / trail 0.5%, EOD 3:10 PM. (survival first)
 
 Status: 5W 0L on paper. Need 20+ confirmed trades before going live.
 """
@@ -280,7 +280,7 @@ class NewsOrbAgent(BaseAgent):
                     side=Side.BUY if direction == 'BUY' else Side.SELL,
                     qty=qty, entry_price=actual_entry, order_id=order_id,
                     strategy=self.name, sl=sl,
-                    trail_activate_pct=1.0, trail_pct=0.5,
+                    trail_activate_pct=0.5, trail_pct=0.5,  # 0.5% activation — survival first
                     trade_id=trade_id,
                 )
 
