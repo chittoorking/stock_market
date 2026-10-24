@@ -17,6 +17,7 @@ Entry 2 — 10:12 / 11:12 / 12:12 scans (confirmed fade):
 Entry 3 — 13:12 / 14:12 (PAPER mode, log only)
 
 Execution: LIMIT DAY at LTP * 0.998 (0.2% thesis confirmation), 5-min fill window, cancel unfilled.
+Liquidity: yfinance avg10d >= 5000 (skip illiquid stocks). Size: pool/3 per trade.
 Exit: SL 2%, trail activate 1.0% / trail 0.5%, EOD 3:10 PM.
 
 Anomaly score (0-8, all sector-relative):
@@ -372,12 +373,25 @@ class AnomalyAgent(BaseAgent):
                 self._log.warning(f'{sym}: not in broker scrips')
                 continue
 
+            # Liquidity filter: skip illiquid stocks (can't exit cleanly)
+            try:
+                import yfinance as yf
+                _yf_info = yf.Ticker(sym + '.NS').info
+                _avg10d = _yf_info.get('averageDailyVolume10Day', 0) or 0
+                if _avg10d < 5000:
+                    self._log.info(f'{sym}: SKIP low liquidity avg10d={_avg10d} (need 5000+)')
+                    audit('anomaly', 'SKIP_LOW_VOLUME', sym, avg10d=_avg10d)
+                    continue
+                self._log.info(f'{sym}: liquidity OK avg10d={_avg10d}')
+            except Exception as _ve:
+                self._log.warning(f'{sym}: yfinance volume check failed: {_ve}')
+
             live_ltp = self._broker.ltp_safe(sym)
             if live_ltp <= 0:
                 live_ltp = ltp
 
-            # Fixed position size: pool / MAX_TRADES -- uniform risk per trade
-            per_trade = self._fm.pool / MAX_TRADES
+            # Position size: pool / 3 — fewer trades, bigger size, clean exits
+            per_trade = self._fm.pool / 3
             qty = int(per_trade * 5 / live_ltp)
             if qty < 1:
                 self._log.info(f'{sym}: qty=0, insufficient funds')

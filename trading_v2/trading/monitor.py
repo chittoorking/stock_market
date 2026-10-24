@@ -87,9 +87,11 @@ class Monitor:
             d = json.loads(message)
             if isinstance(d, str):
                 d = json.loads(d)
-            sec_id = str(d.get('instrument', ''))
+            raw_inst = str(d.get('instrument', ''))
             ltp = d.get('data', {}).get('ltp', 0)
-            if ltp > 0 and sec_id:
+            if ltp > 0 and raw_inst:
+                # Strip prefix: 'NSE:764940' → '764940', 'MCX:483080' → '483080'
+                sec_id = raw_inst.split(':')[-1] if ':' in raw_inst else raw_inst
                 self._on_price_tick(sec_id, ltp)
         except Exception as e:
             log.warning('Price msg error: %s', e)
@@ -102,14 +104,24 @@ class Monitor:
         log.info('Price WS closed: %s', code)
 
     def _resubscribe(self):
-        """Subscribe to price feeds for all active positions."""
+        """Subscribe to price feeds for all active positions (equity + FnO + MCX)."""
         instruments = set()
         for pos in self._pos.active():
+            # FnO / MCX — use fno_sec_id
             sec_id = getattr(pos, 'fno_sec_id', '')
             if sec_id:
                 _mcx = any(m in pos.symbol.upper() for m in _MCX_SYMS)
                 prefix = 'MCX' if _mcx else 'NSE'
                 instruments.add(prefix + ':' + str(sec_id))
+            else:
+                # Equity — resolve from scrip codes
+                eq_sec = getattr(pos, '_eq_sec_id', '')
+                if not eq_sec:
+                    eq_sec = self._resolve_equity_sec(pos.symbol)
+                    if eq_sec:
+                        pos._eq_sec_id = eq_sec
+                if eq_sec:
+                    instruments.add('NSE:' + str(eq_sec))
 
         new = instruments - self._subscribed_instruments
         if new and self._price_ws:
@@ -126,13 +138,40 @@ class Monitor:
     def on_position_opened(self, pos):
         """Called when a new position is opened — subscribe to its price feed."""
         self._resubscribe()
+    def _resolve_equity_sec(self, symbol: str) -> str:
+        """Get INDmoney security_id for equity symbol."""
+        try:
+            from live.indmoney_client import SCRIP_CODES
+            scrip = SCRIP_CODES.get(symbol, '')
+            if scrip and scrip.startswith('NSE_'):
+                return scrip.replace('NSE_', '')
+        except Exception:
+            pass
+        return ''
+
 
     # ── Price tick handler ──────────────────────────────────────────
 
     def _on_price_tick(self, sec_id, ltp):
-        """Real-time SL/trail/target check on every tick."""
+        """Real-time SL/trail/target check on every tick (equity + FnO + MCX)."""
+        # Log first tick per instrument for debugging
+        if sec_id not in self._subscribed_instruments and            not hasattr(self, '_first_tick_logged'):
+            self._first_tick_logged = set()
+        if not hasattr(self, '_first_tick_logged'):
+            self._first_tick_logged = set()
+        if sec_id not in self._first_tick_logged:
+            self._first_tick_logged.add(sec_id)
+            log.info('FIRST_TICK | sec_id=%s ltp=%.2f', sec_id, ltp)
         for pos in self._pos.active():
-            if str(getattr(pos, 'fno_sec_id', '')) != sec_id:
+            # Match by fno_sec_id (FnO/MCX) OR equity sec_id
+            fno_id = str(getattr(pos, 'fno_sec_id', ''))
+            eq_id = str(getattr(pos, '_eq_sec_id', ''))
+            matched = False
+            if fno_id and (fno_id == sec_id or fno_id.split(':')[-1] == sec_id):
+                matched = True
+            elif eq_id and (eq_id == sec_id or eq_id.split(':')[-1] == sec_id):
+                matched = True
+            if not matched:
                 continue
 
             price = ltp
@@ -319,17 +358,17 @@ class Monitor:
     # ── Polling Fallback ────────────────────────────────────────────
 
     def _poll_fallback(self):
-        """Only runs when websocket is disconnected. Basic SL/trail/target via API."""
+        """Runs always as safety net. WS handles real-time, poll catches gaps."""
         while self._running:
             time.sleep(self._poll_interval)
-            if self._price_ws_connected:
-                continue  # WS healthy, skip polling
 
             active = self._pos.active()
             if not active:
                 continue
 
-            log.info('POLL_FALLBACK: WS down, checking %d positions', len(active))
+            # Only log when WS is down to avoid spam
+            if not self._price_ws_connected:
+                log.info('POLL_FALLBACK: WS down, checking %d positions', len(active))
             symbols = list(set(p.symbol for p in active))
             try:
                 prices = self._broker._api.get_ltp(symbols)
