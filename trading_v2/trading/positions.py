@@ -25,6 +25,7 @@ class PositionManager:
         self._positions: dict[str, Position] = {}
         self._lock = threading.Lock()
         self._counter = 0
+        self._on_open_callback = None  # set by monitor for ws subscribe
         self._persist = persist
         if persist:
             self._load_from_disk()
@@ -48,6 +49,11 @@ class PositionManager:
               qty=qty, entry=entry_price, order_id=order_id, strategy=strategy)
         if self._persist:
             self._save_to_disk()
+        if self._on_open_callback:
+            try:
+                self._on_open_callback(pos)
+            except Exception:
+                pass
         return pos
 
     def close(self, pos_id: str, exit_price: float = 0,

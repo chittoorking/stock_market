@@ -43,6 +43,9 @@ class Monitor:
         self._token = Path('/home/ai18developer/news-trading/data/indmoney_token.txt').read_text().strip()
         self._running = True
 
+        # Register callback so new positions auto-subscribe to websocket
+        self._pos._on_open_callback = self.on_position_opened
+
         threading.Thread(target=self._run_price_ws, daemon=True, name='price_ws').start()
         threading.Thread(target=self._run_order_ws, daemon=True, name='order_ws').start()
         threading.Thread(target=self._poll_fallback, daemon=True, name='poll_fallback').start()
