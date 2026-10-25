@@ -341,7 +341,18 @@ class MulOptions(BaseAgent):
             self._log.warning(f'{sym}: no sec_id for futures')
             return
 
-        sl = fut_sl if fut_sl > 0 else (entry_price * 0.98 if entry_price > 0 else 0)
+        # SL = lower of (Multyfi SL, our 2% SL) — caps runaway losses
+        _multyfi_sl = fut_sl if fut_sl > 0 else 0
+        _our_sl = entry_price * 0.98 if action == 'BUY' else entry_price * 1.02
+        if _multyfi_sl > 0 and entry_price > 0:
+            if action == 'BUY':
+                sl = max(_multyfi_sl, _our_sl)  # BUY: SL is below entry, higher = tighter
+            else:
+                sl = min(_multyfi_sl, _our_sl)  # SELL: SL is above entry, lower = tighter
+        elif _multyfi_sl > 0:
+            sl = _multyfi_sl
+        else:
+            sl = _our_sl
 
         # Use Multyfi's lot size and margin if available
         lot_size = int(fd.get('lotSize', 0) or 0)

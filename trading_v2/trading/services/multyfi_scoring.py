@@ -668,49 +668,58 @@ def score_futures(signal: dict, fd: dict) -> int:
 # ── MCX Commodity scoring (5 dimensions, 0-10) ──────────────────────
 
 def score_mcx_commodity(signal: dict, fd: dict) -> int:
-    """Silver+Gold MCX futures. 90% WR at >= 4 on 289 trades."""
+    """Per-commodity scoring based on 483 trades historical analysis.
+    SILVERM: no Tuesday + SL 0.3-2% = 93% WR (55 trades)
+    GOLDM: SL 0.4-1.5% = 84% WR (43 trades)
+    NATURALGAS: SL >= 1.0% + hour < 22 = 92% WR (25 trades)
+    Block: CRUDEOIL, CRUDEOILM, COPPER (no edge after charges)
+    Threshold = 4 for all."""
     score = 0
     entry_price = float(fd.get('entryPrice', signal.get('entry_price', 0)) or 0)
     sl = float(fd.get('stopLoss', fd.get('sl', 0)) or 0)
     sym = str(signal.get('symbol', '')).upper()
-    target_pct = 0
-    try:
-        target_pct = float(str(fd.get('target_pct', fd.get('targetPercent', signal.get('target_pct', 0)))).replace('%', ''))
-    except Exception:
-        pass
-
-    # 1. SL DISTANCE (0-3) — sweet spot is 0.3-2.0%
-    sl_pct = abs(entry_price - sl) / entry_price * 100 if entry_price > 0 and sl > 0 else 0
-    if 0.3 <= sl_pct <= 1.0:
-        score += 3  # 92% WR on Silver
-    elif 1.0 < sl_pct <= 2.0:
-        score += 2  # 88% WR
-    elif 0.2 <= sl_pct < 0.3:
-        score += 1  # 82% WR
-    # < 0.2% or > 2.0% = 0 (losers)
-
-    # 2. COMMODITY TYPE (0-4) — Silver only, reject everything else
-    if 'SILVER' in sym:
-        score += 4  # Silver with trail = 90% WR
-    # Gold/Crude/NatGas = 0 (will fail threshold)
-
-    # 3. TARGET (0-2)
-    if 0 < target_pct <= 1.0:
-        score += 2  # 91% WR, quick targets
-    elif 1.0 < target_pct <= 2.0:
-        score += 1  # 85% WR
-
-    # 4. ENTRY HOUR (0-2)
-    hour = datetime.now().hour
-    if 16 <= hour <= 19:
-        score += 2  # evening session 81-88% WR, biggest profits
-    elif 11 <= hour <= 15:
-        score += 1  # day session 77-81% WR
-
-    # 5. ACTION ALIGNMENT (0-1)
     action = str(fd.get('action', signal.get('action', 'BUY'))).upper()
-    if 'SILVER' in sym and action == 'BUY':
-        score += 1  # Silver BUY = 90% WR vs SELL 74%
+    hour = datetime.now().hour
+    dow = datetime.now().weekday()
 
-    log.info(f'MCX {sym}: conv={score} (sl={sl_pct:.2f}% tgt={target_pct:.1f}% h={hour} {action})')
-    return score
+    sl_pct = abs(entry_price - sl) / entry_price * 100 if entry_price > 0 and sl > 0 else 0
+
+    # ── SILVERM: no Tuesday + SL 0.3-2% ──
+    if 'SILVERM' in sym or ('SILVER' in sym and 'SILVERM' in sym):
+        if dow == 1:  # Tuesday = Nifty expiry, Silver gets whipsawed
+            log.info(f'MCX {sym}: SKIP Tuesday (Nifty expiry volatility)')
+            return 0
+        if sl_pct < 0.3:
+            log.info(f'MCX {sym}: SKIP SL {sl_pct:.2f}% < 0.3% (too tight, noise)')
+            return 0
+        score = 4  # pass all filters = trade
+        log.info(f'MCX {sym}: conv={score} SILVERM (sl={sl_pct:.2f}% d={dow} h={hour} {action})')
+        return score
+
+    # ── GOLDM: SL 0.4-1.5% ──
+    if 'GOLDM' in sym:
+        if sl_pct < 0.4:
+            log.info(f'MCX {sym}: SKIP SL {sl_pct:.2f}% < 0.4% (too tight)')
+            return 0
+        if sl_pct > 1.5:
+            log.info(f'MCX {sym}: SKIP SL {sl_pct:.2f}% > 1.5% (too wide)')
+            return 0
+        score = 4
+        log.info(f'MCX {sym}: conv={score} GOLDM (sl={sl_pct:.2f}% h={hour} {action})')
+        return score
+
+    # ── NATURALGAS: SL >= 1.0% + hour < 22 ──
+    if 'NATURAL' in sym or 'NATGAS' in sym:
+        if sl_pct < 1.0:
+            log.info(f'MCX {sym}: SKIP SL {sl_pct:.2f}% < 1.0% (too tight for NatGas)')
+            return 0
+        if hour >= 22:
+            log.info(f'MCX {sym}: SKIP hour {hour} >= 22 (late night, low liquidity)')
+            return 0
+        score = 4
+        log.info(f'MCX {sym}: conv={score} NATGAS (sl={sl_pct:.2f}% h={hour} {action})')
+        return score
+
+    # ── BLOCK everything else (Crude, Copper, etc.) ──
+    log.info(f'MCX {sym}: SKIP (not in tradeable universe: SILVERM/GOLDM/NATGAS)')
+    return 0
