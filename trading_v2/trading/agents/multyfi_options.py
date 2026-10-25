@@ -120,30 +120,17 @@ class MulOptions(BaseAgent):
             'symbol': symbol, 'option_type': opt_type, 'strike': float(strike),
             'is_commodity': is_commodity, 'entry_price': float(entry_price),
             'action': action, 'instrument': opt.get('instrument', opt.get('stockSymbol', '')),
+            'target_pct': opt.get('targetPercent', opt.get('target', 0)),
+            'sl': float(opt.get('stopLoss', opt.get('sl', 0)) or 0),
+            'expiry': opt.get('expiryDate', opt.get('expiry', '')),
         }
 
-        # Score
+        # Route to handler (scoring happens inside _handle_option / _handle_futures)
         if is_commodity:
-            # Commodity signals handled via _route_signal -> _handle_futures path only
-            return
-        elif opt_type == 'PE':
-            score = multyfi_scoring.score_pe(signal)
-        else:
-            score = multyfi_scoring.score_ce(signal)
-
-        threshold = CE_MIN_SCORE if opt_type == 'CE' else PE_MIN_SCORE
-        audit('multyfi', 'SIGNAL_SCORE', symbol, opt_type=opt_type,
-              score=score, threshold=threshold, direction=action)
-
-        if score >= threshold:
-            self._log.info(f'TAKE {symbol} {opt_type} {strike} score={score} (min={threshold})')
-            tg_alert(f'MULTYFI ENTRY {symbol} {opt_type} score={score}')
-            # Route to _handle_option via fd dict
-            fd = dict(opt)
-            fd['action'] = action
-            self._handle_option(symbol, signal, fd, is_commodity, opt_type)
-        else:
-            self._log.info(f'SKIP {symbol} {opt_type} {strike} score={score} (min={threshold})')
+            return  # Commodity options not traded, only futures via _route_signal
+        fd = dict(opt)
+        fd['action'] = action
+        self._handle_option(symbol, signal, fd, is_commodity, opt_type)
 
     def _handle_stream(self, stream: dict):
         """Route stream item — EXIT or NEW RECOMMENDATION."""
@@ -399,13 +386,22 @@ class MulOptions(BaseAgent):
             'strike': float(signal.get('strike', 0)),
             'is_commodity': is_commodity, 'entry_price': entry_price,
             'action': action, 'instrument': instrument,
+            'target_pct': fd.get('targetPercent', fd.get('target', signal.get('target_pct', 0))),
+            'sl': float(fd.get('stopLoss', fd.get('sl', signal.get('sl', 0))) or 0),
+            'expiry': fd.get('expiryDate', fd.get('expiry', signal.get('expiry', ''))),
         }
 
         # Score — reject MCX commodity options (we only trade Silver futures)
         if is_commodity:
             self._log.info(f'SKIP {sym} {opt_type}: commodity option (futures only)')
             return
-        elif opt_type == 'PE':
+
+        # Duplicate position check
+        for _ep in self._positions.active():
+            if _ep.symbol == sym and getattr(_ep, 'fno_sec_id', ''):
+                self._log.info(f'SKIP {sym} {opt_type}: already have position {_ep.id}')
+                return
+        if opt_type == 'PE':
             score = multyfi_scoring.score_pe(sig)
         else:
             score = multyfi_scoring.score_ce(sig)

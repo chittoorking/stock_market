@@ -232,8 +232,34 @@ class Monitor:
                     peak = pos.peak_price
                     if pos.side == Side.BUY:
                         drop = (price - peak) / peak * 100
-                        # Charge-adjusted floor: trail SL never below entry + charges/qty
-                        _charge_floor = entry + (195 / pos.qty) if pos.qty > 0 else entry
+                        # Charge-adjusted floor: exact INDmoney charges
+                        # Equity intraday: brk(0.1% cap Rs20) + STT(0.025% sell) + exch(0.00307%) + stamp(0.003%) + GST
+                        # Options: brk(Rs5 flat) + STT(0.15% sell) + exch(0.03553%) + stamp(0.003%) + GST
+                        # Futures: brk(Rs5 flat) + STT(0.05% sell) + exch(0.00183%) + stamp(0.002%) + GST
+                        if pos.qty > 0:
+                            tv = entry * pos.qty
+                            if getattr(pos, 'fno_sec_id', ''):  # FnO if has sec_id
+                                if entry < 5000:  # options (premium-based)
+                                    brk = 10  # Rs 5 x 2
+                                    stt = tv * 0.0015  # 0.15% sell
+                                    exch = tv * 0.0003553 * 2
+                                    stamp = tv * 0.00003
+                                else:  # futures (contract value based)
+                                    brk = 10
+                                    stt = tv * 0.0005  # 0.05% sell
+                                    exch = tv * 0.0000183 * 2
+                                    stamp = tv * 0.00002
+                            else:  # equity intraday
+                                brk = min(tv * 0.001, 20) * 2
+                                brk = max(brk, 4)  # min Rs 2 per order x 2
+                                stt = tv * 0.00025  # 0.025% sell
+                                exch = tv * 0.0000307 * 2
+                                stamp = tv * 0.00003
+                            gst = (brk + exch) * 0.18
+                            _charges = brk + stt + exch + stamp + gst
+                            _charge_floor = entry + (_charges * 1.3 / pos.qty)  # 30% buffer for slippage
+                        else:
+                            _charge_floor = entry
                         _trail_sl = peak * (1 - pos.trail_pct / 100)
                         if _trail_sl < _charge_floor:
                             _trail_sl = _charge_floor
@@ -244,8 +270,31 @@ class Monitor:
                             return
                     else:
                         drop = (peak - price) / peak * 100
-                        # Charge-adjusted floor: trail SL never above entry - charges/qty
-                        _charge_floor = entry - (195 / pos.qty) if pos.qty > 0 else entry
+                        # Charge-adjusted floor: exact INDmoney charges
+                        if pos.qty > 0:
+                            tv = entry * pos.qty
+                            if getattr(pos, 'fno_sec_id', ''):  # FnO if has sec_id
+                                if entry < 5000:  # options
+                                    brk = 10
+                                    stt = tv * 0.0015
+                                    exch = tv * 0.0003553 * 2
+                                    stamp = tv * 0.00003
+                                else:  # futures
+                                    brk = 10
+                                    stt = tv * 0.0005
+                                    exch = tv * 0.0000183 * 2
+                                    stamp = tv * 0.00002
+                            else:  # equity intraday
+                                brk = min(tv * 0.001, 20) * 2
+                                brk = max(brk, 4)
+                                stt = tv * 0.00025
+                                exch = tv * 0.0000307 * 2
+                                stamp = tv * 0.00003
+                            gst = (brk + exch) * 0.18
+                            _charges = brk + stt + exch + stamp + gst
+                            _charge_floor = entry - (_charges * 1.3 / pos.qty)  # 30% buffer for slippage
+                        else:
+                            _charge_floor = entry
                         _trail_sl = peak * (1 + pos.trail_pct / 100)
                         if _trail_sl > _charge_floor:
                             _trail_sl = _charge_floor
@@ -255,9 +304,9 @@ class Monitor:
                             self._exit(pos.id, price, 'TRAIL_EXIT')
                             return
 
-            # Trailing target extension (BUY LIMIT)
+            # Trailing target extension (SHORT positions only — anomaly agent)
             if getattr(pos, 'gtt_target_id', '') and getattr(pos, 'gtt_target_pct', 0) > 0:
-                if entry and entry > 0:
+                if entry and entry > 0 and pos.side == Side.SELL:
                     _profit_pct = (entry - price) / entry * 100
                     _tgt_pct = pos.gtt_target_pct
                     _last_ext = getattr(pos, '_last_extend_pct', 0)
@@ -419,18 +468,38 @@ class Monitor:
                            (pos.side == Side.SELL and price <= pos.target):
                             self._exit(pos.id, price, 'TARGET_HIT')
                             continue
-                    # Trail
+                    # Trail (with charge floor — mirrors WS handler)
                     if pos.trail_activate_pct > 0 and pos.trail_pct > 0:
                         if not pos.trail_active and move >= pos.trail_activate_pct:
                             pos.trail_active = True
                         if pos.trail_active:
                             peak = pos.peak_price
+                            entry = pos.entry_price
+                            _cf = entry
+                            if pos.qty > 0:
+                                tv = entry * pos.qty
+                                if getattr(pos, 'fno_sec_id', ''):
+                                    if entry < 5000:
+                                        brk=10; stt=tv*0.0015; exch=tv*0.0003553*2; stamp=tv*0.00003
+                                    else:
+                                        brk=10; stt=tv*0.0005; exch=tv*0.0000183*2; stamp=tv*0.00002
+                                else:
+                                    brk=min(tv*0.001,20)*2; brk=max(brk,4); stt=tv*0.00025; exch=tv*0.0000307*2; stamp=tv*0.00003
+                                gst=(brk+exch)*0.18; _ch=brk+stt+exch+stamp+gst
+                                if pos.side == Side.BUY:
+                                    _cf = entry + (_ch * 1.3 / pos.qty)
+                                else:
+                                    _cf = entry - (_ch * 1.3 / pos.qty)
                             if pos.side == Side.BUY:
-                                drop = (price - peak) / peak * 100
+                                _tsl = peak * (1 - pos.trail_pct / 100)
+                                if _tsl < _cf: _tsl = _cf
+                                if price <= _tsl:
+                                    self._exit(pos.id, price, 'TRAIL_EXIT')
                             else:
-                                drop = (peak - price) / peak * 100
-                            if drop <= -pos.trail_pct:
-                                self._exit(pos.id, price, 'TRAIL_EXIT')
+                                _tsl = peak * (1 + pos.trail_pct / 100)
+                                if _tsl > _cf: _tsl = _cf
+                                if price >= _tsl:
+                                    self._exit(pos.id, price, 'TRAIL_EXIT')
                 except Exception as e:
                     log.warning('Poll check error %s: %s', pos.symbol, e)
 

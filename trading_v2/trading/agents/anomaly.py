@@ -409,6 +409,8 @@ class AnomalyAgent(BaseAgent):
                 self._log.info(f'{sym}: liquidity OK avg10d={_avg10d}')
             except Exception as _ve:
                 self._log.warning(f'{sym}: yfinance volume check failed: {_ve}')
+                audit("anomaly", "SKIP_YFINANCE_ERROR", sym)
+                continue
 
             live_ltp = self._broker.ltp_safe(sym)
             if live_ltp <= 0:
@@ -672,7 +674,7 @@ class AnomalyAgent(BaseAgent):
                             p['gtt_sl_id'] = _gtt_id
                         except Exception:
                             pass
-                        continue  # Don't release capital - position is live
+                        # Fall through to position registration below (don't continue)
                     self._log.info(f'{sym}: second chance no fill — released')
                     self._fm.release(p['trade_id'], pnl=0)
                     self._entered.add(sym)  # block re-entry even on second chance no-fill
@@ -721,6 +723,14 @@ class AnomalyAgent(BaseAgent):
                 _sl_trigger  = tick_round(actual_price * 1.02)
                 _sl_limit    = tick_round(_sl_trigger * 1.005)
                 _tgt_price   = tick_round(actual_price * 0.95)
+                # Cancel immediate GTT SL if exists (may be at stale price), place fresh one
+                _old_gtt = p.get('gtt_sl_id')
+                if _old_gtt:
+                    try:
+                        self._broker._api.cancel_order(_old_gtt)
+                        self._log.info(f'{sym}: cancelled immediate GTT SL {_old_gtt}, replacing at {_sl_trigger}')
+                    except Exception:
+                        self._log.warning(f'{sym}: failed to cancel old GTT {_old_gtt}')
                 _gtt_sl_id   = self._broker.place_gtt(sym, actual_qty, 'BUY', _sl_trigger, _sl_limit)
                 _lmt_tgt_id  = self._broker.buy(sym, actual_qty, price=_tgt_price, order_type='LIMIT')  # BUY LIMIT for target
                 _opened_pos.gtt_sl_id      = _gtt_sl_id
