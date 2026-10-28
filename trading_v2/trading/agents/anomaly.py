@@ -334,10 +334,10 @@ class AnomalyAgent(BaseAgent):
                   dlv=round(s.get('dlv', 0), 1), ltp=s['ltp'],
                   scan=f'{now.hour}:{now.minute:02d}', **extra)
 
-        # Afternoon scans (1:12, 2:12) = paper mode only
-        if now.hour >= 13:
+        # ALL pullback scans = paper mode (0% WR on live, need more data)
+        if is_second_scan:
             for s in to_trade:
-                audit('anomaly', 'PAPER_AFTERNOON', s['ticker'],
+                audit('anomaly', 'PAPER_PULLBACK', s['ticker'],
                       score=s.get('anomaly_score', 0), residual=round(s.get('residual', 0), 1),
                       gap=round(s['gap'], 2), sector=s['sector'],
                       dlv=round(s.get('dlv', 0), 1), ltp=s['ltp'],

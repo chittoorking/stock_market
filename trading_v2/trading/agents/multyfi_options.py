@@ -84,6 +84,19 @@ class MulOptions(BaseAgent):
 
     def _handle_premium_item(self, opt: dict):
         """Route signal from /options/premium or /futures/premium."""
+        # Block orders outside market hours
+        from datetime import datetime as _dt
+        _now = _dt.now()
+        _mcx_close = 23  # MCX closes at 11:30 PM
+        _nse_close = 15  # NSE closes at 3:30 PM
+        is_mcx = any(c in str(opt.get('baseSymbol', '')).upper() for c in ('GOLD', 'SILVER', 'CRUDE', 'NATURAL', 'COPPER'))
+        if is_mcx:
+            if _now.hour < 9 or _now.hour >= _mcx_close:
+                return  # MCX: 9 AM - 11 PM only
+        else:
+            if _now.hour < 9 or (_now.hour == 9 and _now.minute < 15) or _now.hour >= 16:
+                return  # NSE: 9:15 AM - 3:30 PM only
+
         action = str(opt.get('action', opt.get('orderType', ''))).upper()
         if action in ('MULTIPLE', ''):
             return
