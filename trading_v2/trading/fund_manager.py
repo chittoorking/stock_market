@@ -42,8 +42,8 @@ class FundManager:
 
     def calc_equity_qty(self, price, sl_price, lot_size=1):
         """Qty from EQUITY_RISK_PCT of total pool. Same size every trade.
-        If margin exceeds available, FM.request() will reject.
-        Enforces minimum Rs 50K notional (below that, charges eat profits)."""
+        Floor: minimum Rs 10K margin (Rs 50K notional at 5x MIS).
+        If margin exceeds available, FM.request() will reject."""
         if price <= 0 or sl_price <= 0:
             return lot_size
         sl_dist = abs(price - sl_price)
@@ -51,10 +51,11 @@ class FundManager:
             return lot_size
         risk_amt = self.pool * EQUITY_RISK_PCT / 100
         qty = int(risk_amt / sl_dist)
-        # Minimum notional Rs 50K — below that charges eat >30% of wins
-        min_qty = int(50000 / price) if price > 0 else 1
-        if qty < min_qty:
-            return 0  # signal to caller: pool too small for this trade
+        margin = qty * price / 5
+        # Floor: minimum Rs 10K margin per trade (Rs 50K notional)
+        # Below that, charges eat >30% of wins
+        if margin < 10000:
+            qty = int(10000 * 5 / price)  # Rs 50K notional
         return max(qty, lot_size)
 
     @property
