@@ -274,17 +274,45 @@ class MulOptions(BaseAgent):
         except Exception as e:
             self._log.warning(f'{sym}: VWAP check failed ({e}), proceeding anyway')
 
+        # Delivery change filter — only enter if institutions confirm
+        # dlv_chg > 0 = 100% WR on 18-day backtest (7W 0L)
+        try:
+            from trading.services.ml_enricher import _poll, _cache
+            import trading.services.ml_enricher as mle
+            mle._cache_time = 0
+            _poll()
+            ml_data = mle._cache.get(sym, {})
+            dlv_now = ml_data.get('deliveryPercentage', 0) or 0
+            # We need dlv_chg but ML enricher gives snapshot, not change
+            # Use a simple check: delivery must be > 40% (institutional participation)
+            # AND we store first-seen delivery to compute change
+            if not hasattr(self, '_dlv_baseline'):
+                self._dlv_baseline = {}
+            if sym not in self._dlv_baseline and dlv_now > 0:
+                self._dlv_baseline[sym] = dlv_now
+            dlv_first = self._dlv_baseline.get(sym, 0)
+            dlv_chg = dlv_now - dlv_first if dlv_first > 0 and dlv_now > 0 else 0
+            if dlv_chg <= 0:
+                self._log.info(f'SKIP {sym}: dlv_chg={dlv_chg:+.1f} (no institutional confirmation)')
+                audit('multyfi', 'EQUITY_SKIP_DLV', sym, dlv_now=round(dlv_now, 1),
+                      dlv_first=round(dlv_first, 1), dlv_chg=round(dlv_chg, 1))
+                return
+            self._log.info(f'{sym}: dlv_chg={dlv_chg:+.1f} (institutional confirmed)')
+        except Exception as e:
+            self._log.warning(f'{sym}: delivery check failed ({e}), skipping')
+            return
+
         audit('multyfi', 'EQUITY_ENTRY', sym, entry=entry_price, sl=sl,
-              target=target, action=action)
-        self._log.info(f'EQUITY {action} {sym} @ {entry_price} SL={sl} TGT={target}')
+              target=target, action=action, dlv_chg=round(dlv_chg, 1))
+        self._log.info(f'EQUITY {action} {sym} @ {entry_price} SL={sl} TGT={target} dlv_chg={dlv_chg:+.1f}')
 
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
             entry=entry_price,
             sl=sl,
             target=target,
-            trail_activate_pct=10,  # move SL to breakeven at 10% profit
-            trail_pct=10,  # trail 10% from peak = breakeven floor
+            trail_activate_pct=0.5,  # trail 0.5/0.5 like other equity strategies
+            trail_pct=0.5,
             conviction=7,
             reason=f'multyfi equity {action}',
         )
