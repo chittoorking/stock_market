@@ -27,7 +27,6 @@ from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import get_logger, tg_alert
 
-log = get_logger('pullback')
 
 # Config
 GAP_MIN = 5.0

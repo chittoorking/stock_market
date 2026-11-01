@@ -21,7 +21,6 @@ from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import get_logger, tg_alert
 
-log = get_logger('market_lens')
 
 # Config
 GAP_THRESHOLD = -1.0

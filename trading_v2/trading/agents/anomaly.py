@@ -28,7 +28,6 @@ Anomaly score (0-8, all sector-relative):
 Backtest: 25W 0L = 100% WR across 7 days (Sep 30 - Oct 9, 2026).
 """
 import time
-import json
 from datetime import datetime
 from collections import defaultdict
 
@@ -38,7 +37,6 @@ from trading.logger import audit, get_logger, tg_alert
 from live.indmoney_client import tick_round
 from trading.services import price_tracker
 
-log = get_logger('anomaly')
 
 # Heartbeat scans - when to scan for anomalies
 ENTRY_TIMES = [
@@ -60,8 +58,6 @@ class AnomalyAgent(BaseAgent):
         super().__init__(broker, positions, fund_manager, monitor)
         self._entered = set()  # tracks all tickers entered today (for re-entry logging)
         self._sl_hit = set()   # tickers that hit SL today — no re-entry
-        self._ml_session = None
-        self._ml_action = None
 
     def run(self):
         """Main loop: wait for each heartbeat, scan, trade."""
@@ -189,7 +185,7 @@ class AnomalyAgent(BaseAgent):
             if s['nm'] < 0 and s['ocf'] <= 0: score += 1
             s['anomaly_score'] = score
 
-        if True:  # 9:20 scan only
+        # 9:20 scan only
             # 9:20: gain>4% + residual<=13 + anomaly_score>=5
             candidates = [s for s in stocks
                           if s['anomaly_score'] >= MIN_ANOMALY_SCORE
@@ -215,8 +211,6 @@ class AnomalyAgent(BaseAgent):
             candidates = [s for s in candidates
                           if (s.get('wk', 0) - s.get('gain_from_prev', 0)) < 10]
             candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
-        else:
-            candidates = []
 
         # How many slots available?
         current_positions = len([p for p in self._positions.active()
@@ -267,7 +261,6 @@ class AnomalyAgent(BaseAgent):
 
     def _place_and_fill(self, candidates):
         """Place all SHORT orders at once, wait up to 5 min, check fills."""
-        import time
 
         # Phase 1: Place all orders
         pending = []
@@ -629,7 +622,6 @@ class AnomalyAgent(BaseAgent):
                 self._positions._save_to_disk()  # persist IDs immediately
                 # --------------------------------------------------------------
 
-                is_reentry = sym in self._entered
                 self._entered.add(sym)
 
                 audit('anomaly', 'SECOND_CHANCE_ENTRY', sym,
@@ -643,7 +635,7 @@ class AnomalyAgent(BaseAgent):
     def _fetch_market_lens(self):
         """Fetch all stocks from NSE Market Lens."""
         try:
-            from trading.services.ml_enricher import _init, _poll, _cache, _cache_time
+            from trading.services.ml_enricher import _poll
             import trading.services.ml_enricher as mle
 
             # Force fresh poll

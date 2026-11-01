@@ -15,7 +15,6 @@ Exit: SL 1.5%, trail activate 0.5% / trail 0.5%, EOD 3:10 PM. (survival first)
 
 Status: 5W 0L on paper. Need 20+ confirmed trades before going live.
 """
-import math
 import json
 import time
 from datetime import datetime
