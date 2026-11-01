@@ -45,7 +45,7 @@ class BaseAgent:
                 # Use Multyfi's actual margin requirement
                 margin = req.fno_margin * (qty / base_lot) if base_lot > 0 else req.fno_margin
             elif is_futures:
-                margin = entry * qty * 0.15  # fallback estimate
+                margin = entry * qty * 0.05  # MIS margin ~5% of contract value
             else:
                 margin = entry * qty  # options premium is the cost
 
