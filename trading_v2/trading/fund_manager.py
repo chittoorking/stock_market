@@ -41,16 +41,14 @@ class FundManager:
                  f'equity_risk={EQUITY_RISK_PCT}% | loss_limit=Rs {self.daily_loss_limit:,.0f}')
 
     def calc_equity_qty(self, price, sl_price, lot_size=1):
-        """Qty from EQUITY_RISK_PCT of available capital (not total pool)."""
+        """Qty from EQUITY_RISK_PCT of total pool. Same size every trade.
+        If margin exceeds available, FM.request() will reject."""
         if price <= 0 or sl_price <= 0:
             return lot_size
         sl_dist = abs(price - sl_price)
         if sl_dist <= 0:
             return lot_size
-        avail = self.available
-        if avail <= 0:
-            return lot_size
-        risk_amt = min(self.pool, avail) * EQUITY_RISK_PCT / 100
+        risk_amt = self.pool * EQUITY_RISK_PCT / 100
         qty = int(risk_amt / sl_dist)
         return max(qty, lot_size)
 
