@@ -505,6 +505,9 @@ class MulOptions(BaseAgent):
         margin_req = float(fd.get('marginRequired', 0) or 0)
 
         # Lot scaling by conviction: 5-6=1x, 7-8=2x, 9+=3x
+        # Gold/Silver passed COMEX gate = score 6 equivalent
+        if not isinstance(score, (int, float)):
+            score = 6
         if score >= 9:
             lot_mult = 3
         elif score >= 7:
@@ -516,11 +519,8 @@ class MulOptions(BaseAgent):
         if lot_size > 0:
             self._log.info(f'{sym}: lot={lot_size} x{lot_mult} = {scaled_lot} (score={score})')
 
-        # Trail params differ: MCX commodity vs NSE futures
-        if is_commodity:
-            _trail_act, _trail_pct = 0.07, 50  # Silver MCX: activate at 150 ticks, trail 50%
-        else:
-            _trail_act, _trail_pct = 0.3, 0.3  # NSE futures: 97% WR with consec+ha
+        # Trail params: same 0.3/0.3 for all confirmed futures (Gold/Silver/NSE)
+        _trail_act, _trail_pct = 0.3, 0.3
 
         req = TradeRequest(
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
