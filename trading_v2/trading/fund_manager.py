@@ -42,7 +42,8 @@ class FundManager:
 
     def calc_equity_qty(self, price, sl_price, lot_size=1):
         """Qty from EQUITY_RISK_PCT of total pool. Same size every trade.
-        If margin exceeds available, FM.request() will reject."""
+        If margin exceeds available, FM.request() will reject.
+        Enforces minimum Rs 50K notional (below that, charges eat profits)."""
         if price <= 0 or sl_price <= 0:
             return lot_size
         sl_dist = abs(price - sl_price)
@@ -50,12 +51,19 @@ class FundManager:
             return lot_size
         risk_amt = self.pool * EQUITY_RISK_PCT / 100
         qty = int(risk_amt / sl_dist)
+        # Minimum notional Rs 50K — below that charges eat >30% of wins
+        min_qty = int(50000 / price) if price > 0 else 1
+        if qty < min_qty:
+            return 0  # signal to caller: pool too small for this trade
         return max(qty, lot_size)
 
     @property
     def available(self):
+        """Available capital after deployed + 10% charge buffer."""
         with self._lock:
-            return self.pool - sum(d['amount'] for d in self._deployed.values())
+            buffer = self.pool * 0.10  # 10% reserved for charges
+            deployed = sum(d['amount'] for d in self._deployed.values())
+            return self.pool - deployed - buffer
 
     def request(self, strategy, symbol, amount, conviction=5):
         """Strategy says how much it needs. FM just checks if possible."""
