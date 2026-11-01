@@ -398,21 +398,23 @@ class MulOptions(BaseAgent):
         if score < threshold:
             return
 
-        # MCX commodities: execute via INDmoney MCX API + send Telegram alert
+        # MCX commodities: PAPER MODE — log signal, don't execute
+        # Need COMEX confirmation before going live. Collecting data.
         if is_commodity:
+            sl_pct = abs(entry_price - fut_sl) / entry_price * 100 if entry_price > 0 and fut_sl > 0 else 0
+            audit('multyfi', 'COMMODITY_PAPER', sym,
+                  action=action, entry=entry_price, sl=fut_sl,
+                  sl_pct=round(sl_pct, 2), score=score,
+                  hour=datetime.now().hour, dow=datetime.now().weekday())
+            self._log.info(f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} ({sl_pct:.1f}%) score={score}')
             try:
                 import requests as _req
-                msg = f'MULTYFI MCX {action} {sym} @ {entry_price} SL={fut_sl}'
+                msg = f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} score={score}'
                 _req.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
                           json={'chat_id': TG_CHAT_ID, 'text': msg}, timeout=5)
-                self._log.info(f'TG ALERT: {msg}')
             except Exception:
                 pass
-            # Use our own trail exit, not Multyfi's exit signal
-            signal['use_trail'] = True
-            signal['trail_be_trigger'] = 150  # ticks before breakeven SL
-            signal['trail_pct'] = 0.50  # trail at 50% of peak
-            # Fall through to broker execution below (don't return)
+            return  # Don't execute — paper only
 
         # Resolve sec_id — ALWAYS use numeric sec_id from instrument master
         instrument = fd.get('instrument', fd.get('stockSymbol', ''))
