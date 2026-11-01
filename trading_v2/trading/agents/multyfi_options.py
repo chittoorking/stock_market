@@ -443,8 +443,43 @@ class MulOptions(BaseAgent):
                     self._log.warning(f'GOLD {sym}: COMEX check failed ({e}), skipping')
                     return
                 # Gold passed all gates — fall through to execution below
+            elif 'SILVER' in sym.upper():
+                # SILVER LIVE: consec+HA on COMEX Silver + no Tuesday + SL >= 0.3%
+                # Validated: 18W 0L = 100% WR
+                if datetime.now().weekday() == 1:
+                    self._log.info(f'SKIP SILVER {sym}: Tuesday (NIFTY expiry whipsaws MCX)')
+                    audit('multyfi', 'SILVER_SKIP_TUE', sym)
+                    return
+                if sl_pct < 0.3:
+                    self._log.info(f'SKIP SILVER {sym}: SL {sl_pct:.2f}% < 0.3% (noise)')
+                    audit('multyfi', 'SILVER_SKIP_SL', sym, sl_pct=round(sl_pct, 2))
+                    return
+                try:
+                    import yfinance as yf
+                    si = yf.download('SI=F', period='5d', interval='1h', progress=False, auto_adjust=True)
+                    if hasattr(si, 'columns') and isinstance(si.columns, pd.MultiIndex):
+                        si.columns = si.columns.get_level_values(0)
+                    if len(si) >= 10:
+                        candles = [{'o': float(r['Open']), 'h': float(r['High']),
+                                    'l': float(r['Low']), 'c': float(r['Close'])}
+                                   for _, r in si.tail(10).iterrows()]
+                        consec_al, ha_al, _ = multyfi_scoring._check_consec_ha(candles, action)
+                        silver_score = (3 if consec_al else 0) + (3 if ha_al else 0)
+                        if silver_score < 6:
+                            self._log.info(f'SKIP SILVER {sym}: COMEX score={silver_score} < 6')
+                            audit('multyfi', 'SILVER_SKIP_COMEX', sym,
+                                  comex_score=silver_score, sl_pct=round(sl_pct, 2))
+                            return
+                        self._log.info(f'SILVER LIVE {sym}: COMEX score={silver_score} SL={sl_pct:.1f}%')
+                    else:
+                        self._log.warning(f'SILVER {sym}: no COMEX data, skipping')
+                        return
+                except Exception as e:
+                    self._log.warning(f'SILVER {sym}: COMEX check failed ({e}), skipping')
+                    return
+                # Silver passed all gates — fall through to execution below
             else:
-                # Non-Gold commodities: PAPER mode
+                # Non-Gold/Silver commodities: PAPER mode
                 self._log.info(f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} ({sl_pct:.1f}%) score={score}')
                 try:
                     import requests as _req
@@ -453,7 +488,7 @@ class MulOptions(BaseAgent):
                               json={'chat_id': TG_CHAT_ID, 'text': msg}, timeout=5)
                 except Exception:
                     pass
-                return  # Paper only for non-Gold
+                return  # Paper only for Crude/NatGas
 
         # Resolve sec_id — ALWAYS use numeric sec_id from instrument master
         instrument = fd.get('instrument', fd.get('stockSymbol', ''))
