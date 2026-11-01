@@ -11,7 +11,7 @@ Timeline:
           AND delivery increased > 2pp from baseline
   11:12 — Enter confirmed trades (currently PAPER_MODE = False)
 
-Exit: SL 2%, trail activate 0.5% / trail 0.5%, EOD 3:10 PM. (survival first)
+Exit: SL 1.5%, trail activate 0.5% / trail 0.5%, EOD 3:10 PM. (survival first)
 
 Status: 5W 0L on paper. Need 20+ confirmed trades before going live.
 """
@@ -282,8 +282,8 @@ class NewsOrbAgent(BaseAgent):
 
             # Position sizing
             available = self._fm.available
-            # Position size: pool / 5, max Rs 50K margin per trade
-            per_trade = min(self._fm.pool / 5, 50000)
+            # Position size: available / 3, max Rs 50K margin per trade
+            per_trade = min(available / 3, 50000)
             qty = int(per_trade * 5 / live_ltp)
             if qty < 1:
                 continue
@@ -319,11 +319,15 @@ class NewsOrbAgent(BaseAgent):
                         self._broker.cancel(order_id)
                     except Exception:
                         pass
-                    self._fm.release(trade_id, 0)
-                    continue
+                    # Re-check: order may have filled between check and cancel
+                    _filled, _fill_price = self._broker.order_filled(order_id)
+                    if not _filled:
+                        self._fm.release(trade_id, 0)
+                        continue
+                    self._log.info(f'{sym}: filled during cancel race, proceeding')
                 actual_entry = _fill_price if _fill_price > 0 else live_ltp
 
-                sl_pct = 2.0
+                sl_pct = 1.5
                 if direction == 'BUY':
                     sl = round(actual_entry * (1 - sl_pct / 100), 2)
                 else:
@@ -356,8 +360,13 @@ class NewsOrbAgent(BaseAgent):
                     _sl_limit = tick_round(sl * 1.005)  # 0.5% above trigger
                     _gtt_side = 'BUY'
                 try:
-                    _gtt_id = self._broker.place_gtt_sl(sym, _gtt_side, _sl_trigger, _sl_limit, qty)
+                    _gtt_id = self._broker.place_gtt(sym, qty, _gtt_side, _sl_trigger, _sl_limit)
                     self._log.info(f'{sym}: GTT SL placed @ {_sl_trigger} -> {_gtt_id}')
+                    # Save GTT ID to position for trail updates
+                    pos = self._positions.find_by_symbol(sym)
+                    if pos and _gtt_id:
+                        pos.gtt_sl_id = _gtt_id
+                        pos._last_gtt_sl = _sl_trigger
                 except Exception as _e:
                     self._log.warning(f'{sym}: GTT SL failed: {_e}')
 

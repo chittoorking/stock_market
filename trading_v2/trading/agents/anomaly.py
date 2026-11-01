@@ -51,7 +51,7 @@ ENTRY_TIMES = [
 ]
 
 MAX_TRADES = 10
-SL_PCT = 2.0
+SL_PCT = 1.5
 TRAIL_ACTIVATE = 1.0
 TRAIL_PCT = 0.5
 MIN_ANOMALY_SCORE = 5
@@ -241,6 +241,11 @@ class AnomalyAgent(BaseAgent):
                           gain=round(s.get("gain_from_prev", 0), 1), dlv=round(s.get("dlv", 0), 1))
                     continue
                 gain = s.get('gain_from_prev', 0)
+                # Minimum anomaly score for pullback
+                if s.get("anomaly_score", 0) < 3:
+                    audit("anomaly", "SKIP_LOW_SCORE", s["ticker"],
+                          gain=round(gain, 1), score=s.get("anomaly_score", 0))
+                    continue
                 if gain < 5 or gain > 10: continue
                 # Pullback from day high
                 dh = s.get('day_high', 0)

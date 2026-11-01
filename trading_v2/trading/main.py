@@ -36,10 +36,12 @@ AGENTS = {
     'news_orb':        'trading.agents.news_orb:NewsOrbAgent',
     'multyfi_options': 'trading.agents.multyfi_options:MulOptions',
     'ipo':             'trading.agents.ipo:IpoAgent',
+    'pullback':        'trading.agents.pullback:PullbackAgent',
+    'market_lens':     'trading.agents.market_lens:MarketLensAgent',
 }
 
 # Agents with custom run() — started as background threads
-AUTONOMOUS = {'anomaly', 'news_orb', 'multyfi_options', 'ipo'}
+AUTONOMOUS = {'anomaly', 'news_orb', 'multyfi_options', 'ipo', 'pullback', 'market_lens'}
 
 
 def _load(path: str):

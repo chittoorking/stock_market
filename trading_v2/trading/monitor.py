@@ -231,7 +231,6 @@ class Monitor:
                 if pos.trail_active:
                     peak = pos.peak_price
                     if pos.side == Side.BUY:
-                        drop = (price - peak) / peak * 100
                         # Charge-adjusted floor: exact INDmoney charges
                         # Equity intraday: brk(0.1% cap Rs20) + STT(0.025% sell) + exch(0.00307%) + stamp(0.003%) + GST
                         # Options: brk(Rs5 flat) + STT(0.15% sell) + exch(0.03553%) + stamp(0.003%) + GST
@@ -263,13 +262,26 @@ class Monitor:
                         _trail_sl = peak * (1 - pos.trail_pct / 100)
                         if _trail_sl < _charge_floor:
                             _trail_sl = _charge_floor
+                        # Update exchange GTT to match trail SL
+                        _gtt_id = str(getattr(pos, 'gtt_sl_id', ''))
+                        if _gtt_id and hasattr(self, '_broker'):
+                            _old_gtt = getattr(pos, '_last_gtt_sl', 0)
+                            if abs(_trail_sl - _old_gtt) > entry * 0.002:  # update if moved >0.2%
+                                try:
+                                    from live.indmoney_client import tick_round
+                                    _new_trigger = tick_round(_trail_sl)
+                                    _new_limit = tick_round(_trail_sl * 0.995)
+                                    self._broker.modify_gtt(_gtt_id, _new_trigger, _new_limit)
+                                    pos._last_gtt_sl = _trail_sl
+                                    log.info('GTT_TRAIL_UPDATE | %s | gtt=%s new_sl=%.2f', pos.symbol, _gtt_id, _trail_sl)
+                                except Exception as _e:
+                                    log.warning('GTT_TRAIL_UPDATE_FAIL | %s | %s', pos.symbol, _e)
                         if price <= _trail_sl:
                             log.info('TRAIL_EXIT | %s | price=%.2f peak=%.2f trail_sl=%.2f (charge_floor=%.2f)',
                                      pos.symbol, price, peak, _trail_sl, _charge_floor)
                             self._exit(pos.id, price, 'TRAIL_EXIT')
                             return
                     else:
-                        drop = (peak - price) / peak * 100
                         # Charge-adjusted floor: exact INDmoney charges
                         if pos.qty > 0:
                             tv = entry * pos.qty
@@ -298,6 +310,20 @@ class Monitor:
                         _trail_sl = peak * (1 + pos.trail_pct / 100)
                         if _trail_sl > _charge_floor:
                             _trail_sl = _charge_floor
+                        # Update exchange GTT to match trail SL
+                        _gtt_id = str(getattr(pos, 'gtt_sl_id', ''))
+                        if _gtt_id and hasattr(self, '_broker'):
+                            _old_gtt = getattr(pos, '_last_gtt_sl', 0)
+                            if abs(_trail_sl - _old_gtt) > entry * 0.002:
+                                try:
+                                    from live.indmoney_client import tick_round
+                                    _new_trigger = tick_round(_trail_sl)
+                                    _new_limit = tick_round(_trail_sl * 1.005)
+                                    self._broker.modify_gtt(_gtt_id, _new_trigger, _new_limit)
+                                    pos._last_gtt_sl = _trail_sl
+                                    log.info('GTT_TRAIL_UPDATE | %s | gtt=%s new_sl=%.2f', pos.symbol, _gtt_id, _trail_sl)
+                                except Exception as _e:
+                                    log.warning('GTT_TRAIL_UPDATE_FAIL | %s | %s', pos.symbol, _e)
                         if price >= _trail_sl:
                             log.info('TRAIL_EXIT | %s | price=%.2f peak=%.2f trail_sl=%.2f (charge_floor=%.2f)',
                                      pos.symbol, price, peak, _trail_sl, _charge_floor)
@@ -566,7 +592,8 @@ class Monitor:
         if to_close:
             log.info('EOD: closing %d positions', len(to_close))
             for p in to_close:
-                self._exit(p.id, reason='EOD_EXIT')
+                ltp = self._broker.ltp_safe(p.symbol, p.entry_price)
+                self._exit(p.id, exit_price=ltp, reason='EOD_EXIT')
 
         # Verify broker is clean (retry with widening buffer)
         for attempt in range(5):
