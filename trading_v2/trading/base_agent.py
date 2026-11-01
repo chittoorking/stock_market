@@ -53,7 +53,7 @@ class BaseAgent:
             avail = self._fm.available
             while margin > avail and qty > base_lot:
                 qty -= base_lot
-                margin = entry * qty * 0.15 if is_futures else entry * qty
+                margin = entry * qty * 0.05 if is_futures else entry * qty
                 self._log.info(f'{req.symbol}: scaling down to {qty} (avail=Rs {avail:,.0f})')
             # Ensure qty is multiple of lot size (MCX requires exact multiples)
             if req.fno_lot_size > 0 and qty % req.fno_lot_size != 0:

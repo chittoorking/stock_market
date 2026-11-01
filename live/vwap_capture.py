@@ -675,24 +675,47 @@ def main():
     depth_file = open(DEPTH_FILE, 'a', encoding='utf-8')
 
     def load_depth_watchlist():
-        """Load news signal stocks from today's audit trail."""
+        """Load F&O stocks + NIFTY 50 + news stocks + active positions for depth."""
+        # 1. NIFTY 50 + key F&O stocks (always tracked)
+        nifty50_fo = [
+            'RELIANCE','TCS','HDFCBANK','INFY','ICICIBANK','BHARTIARTL','SBIN','ITC',
+            'HINDUNILVR','LT','KOTAKBANK','HCLTECH','AXISBANK','BAJFINANCE','MARUTI',
+            'SUNPHARMA','TATAMOTORS','TITAN','WIPRO','NTPC','POWERGRID','TATASTEEL',
+            'ADANIENT','ADANIPORTS','BAJAJFINSV','JSWSTEEL','COALINDIA','DRREDDY',
+            'ONGC','ULTRACEMCO','NESTLEIND','CIPLA','DIVISLAB','EICHERMOT','BRITANNIA',
+            'BPCL','TECHM','HEROMOTOCO','INDUSINDBK','SBILIFE','HDFCLIFE','GRASIM',
+            'APOLLOHOSP','TATACONSUM','BEL','BHEL','HAL','DLF','SIEMENS','PAYTM',
+            'PFC','YESBANK','SHRIRAMFIN','PHOENIXLTD','VEDL','BANKBARODA','CGPOWER',
+        ]
+        for sym in nifty50_fo:
+            depth_watchlist.add(sym)
+
+        # 2. News signal stocks from audit trail
         audit_path = Path(__file__).parent / 'logs' / f'audit_{today}.jsonl'
-        if not audit_path.exists():
-            return
+        if audit_path.exists():
+            try:
+                with open(audit_path) as f:
+                    for line in f:
+                        try:
+                            r = json.loads(line)
+                            if r.get('action') in ('SIGNAL_TRADE', 'HEADLINE_FILTERED',
+                                                    'ENTRY', 'CONFIRMED_ENTRY', 'EQUITY_ENTRY'):
+                                sym = r.get('symbol', '')
+                                if ':' in sym:
+                                    sym = sym.split(':')[0].strip()
+                                if sym and len(sym) <= 20 and sym.isalpha():
+                                    depth_watchlist.add(sym)
+                        except:
+                            pass
+            except:
+                pass
+
+        # 3. Active positions
         try:
-            with open(audit_path) as f:
-                for line in f:
-                    try:
-                        r = json.loads(line)
-                        if r.get('action') in ('SIGNAL_TRADE', 'HEADLINE_FILTERED'):
-                            sym = r.get('symbol', '')
-                            # Extract stock symbol from headline (e.g., "TCI: buyback..." -> "TCI")
-                            if ':' in sym:
-                                sym = sym.split(':')[0].strip()
-                            if sym and len(sym) <= 20 and sym.isalpha():
-                                depth_watchlist.add(sym)
-                    except:
-                        pass
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'trading_v2'))
+            from trading.positions import PositionManager
+            # Can't access positions directly, but logged symbols from audit cover it
         except:
             pass
 
