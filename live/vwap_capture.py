@@ -370,6 +370,45 @@ class MarketContext:
             except Exception as e:
                 log.debug(f'52week: {e}')
 
+            # 11. OI SPURTS — stocks with sudden OI increase (institutional activity)
+            try:
+                d_oi = self._get('https://www.nseindia.com/api/live-analysis-oi-spurts-underlyings')
+                if d_oi:
+                    oi_data = d_oi.get('data', [])
+                    ctx['oi_spurts_count'] = len(oi_data)
+                    # Top 5 OI spurts
+                    for i, item in enumerate(oi_data[:5]):
+                        ctx[f'oi_spurt_{i}_sym'] = item.get('symbol', '')
+                        ctx[f'oi_spurt_{i}_chg'] = item.get('changeInOI', 0)
+                        ctx[f'oi_spurt_{i}_pchg'] = item.get('pChange', 0)
+            except Exception as e:
+                log.debug(f'OI spurts: {e}')
+
+            # 12. VOLUME GAINERS — unusual volume activity
+            try:
+                d_vg = self._get('https://www.nseindia.com/api/live-analysis-volume-gainers')
+                if d_vg:
+                    vg_data = d_vg.get('data', [])
+                    ctx['vol_gainers_count'] = len(vg_data)
+                    for i, item in enumerate(vg_data[:5]):
+                        ctx[f'vol_gainer_{i}_sym'] = item.get('symbol', '')
+                        ctx[f'vol_gainer_{i}_ratio'] = item.get('ratio', 0)
+            except Exception as e:
+                log.debug(f'Vol gainers: {e}')
+
+            # 13. MOST ACTIVE F&O — where the big money is
+            try:
+                d_fo = self._get('https://www.nseindia.com/api/live-analysis-most-active-underlying?index=FO')
+                if d_fo:
+                    fo_data = d_fo.get('data', [])
+                    ctx['active_fo_count'] = len(fo_data)
+                    for i, item in enumerate(fo_data[:5]):
+                        ctx[f'active_fo_{i}_sym'] = item.get('symbol', '')
+                        ctx[f'active_fo_{i}_vol'] = item.get('totalTradedVolume', 0)
+                        ctx[f'active_fo_{i}_val'] = item.get('totalTradedValue', 0)
+            except Exception as e:
+                log.debug(f'Active FO: {e}')
+
             # 11. BROAD MARKET BREADTH — computed from ML scan
             try:
                 from trading.services.ml_enricher import _poll as ml_poll, _cache as ml_cache
