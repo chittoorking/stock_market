@@ -313,6 +313,86 @@ class MarketContext:
                 fo_data = d8.get('data', [])
                 ctx['preopen_fo_count'] = len(fo_data)
 
+            # 7. OPTION CHAIN — NIFTY OI per strike (PCR, max pain)
+            try:
+                d_oc = self._get('https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY')
+                if d_oc and d_oc.get('filtered'):
+                    fdata = d_oc['filtered']['data']
+                    total_ce_oi = sum(r.get('CE', {}).get('openInterest', 0) for r in fdata)
+                    total_pe_oi = sum(r.get('PE', {}).get('openInterest', 0) for r in fdata)
+                    total_ce_chg = sum(r.get('CE', {}).get('changeinOpenInterest', 0) for r in fdata)
+                    total_pe_chg = sum(r.get('PE', {}).get('changeinOpenInterest', 0) for r in fdata)
+                    ctx['nifty_ce_oi'] = total_ce_oi
+                    ctx['nifty_pe_oi'] = total_pe_oi
+                    ctx['nifty_ce_oi_chg'] = total_ce_chg
+                    ctx['nifty_pe_oi_chg'] = total_pe_chg
+                    ctx['nifty_pcr'] = round(total_pe_oi / total_ce_oi, 3) if total_ce_oi > 0 else 0
+                    ctx['nifty_pcr_chg'] = round(total_pe_chg / total_ce_chg, 3) if total_ce_chg != 0 else 0
+                    # Max pain: strike where total OI (CE+PE) is highest
+                    max_oi_strike = max(fdata, key=lambda r: r.get('CE', {}).get('openInterest', 0) + r.get('PE', {}).get('openInterest', 0))
+                    ctx['nifty_max_pain'] = max_oi_strike.get('strikePrice', 0)
+            except Exception as e:
+                log.debug(f'Option chain: {e}')
+
+            # 8. BANKNIFTY OPTION CHAIN
+            try:
+                d_bn = self._get('https://www.nseindia.com/api/option-chain-indices?symbol=BANKNIFTY')
+                if d_bn and d_bn.get('filtered'):
+                    fdata = d_bn['filtered']['data']
+                    total_ce_oi = sum(r.get('CE', {}).get('openInterest', 0) for r in fdata)
+                    total_pe_oi = sum(r.get('PE', {}).get('openInterest', 0) for r in fdata)
+                    ctx['bn_ce_oi'] = total_ce_oi
+                    ctx['bn_pe_oi'] = total_pe_oi
+                    ctx['bn_pcr'] = round(total_pe_oi / total_ce_oi, 3) if total_ce_oi > 0 else 0
+            except Exception as e:
+                log.debug(f'BN option chain: {e}')
+
+            # 9. MOST ACTIVE — volume leaders
+            try:
+                d_active = self._get('https://www.nseindia.com/api/live-analysis-most-active-securities?index=volume&type=ALL')
+                if d_active:
+                    active = d_active.get('data', [])
+                    ctx['most_active_count'] = len(active)
+                    if active:
+                        ctx['most_active_top'] = active[0].get('symbol', '')
+                        ctx['most_active_top_vol'] = active[0].get('quantityTraded', 0)
+            except Exception as e:
+                log.debug(f'Most active: {e}')
+
+            # 10. 52-WEEK HIGHS/LOWS — breadth signal
+            try:
+                d_52h = self._get('https://www.nseindia.com/api/live-analysis-52Week?index=high')
+                if d_52h:
+                    ctx['new_52w_highs'] = len(d_52h.get('data', []))
+                d_52l = self._get('https://www.nseindia.com/api/live-analysis-52Week?index=low')
+                if d_52l:
+                    ctx['new_52w_lows'] = len(d_52l.get('data', []))
+            except Exception as e:
+                log.debug(f'52week: {e}')
+
+            # 11. BROAD MARKET BREADTH — computed from ML scan
+            try:
+                from trading.services.ml_enricher import _poll as ml_poll, _cache as ml_cache
+                import trading.services.ml_enricher as mle
+                total_ml = 0; ml_down = 0; ml_bv = 0; ml_dlv_up = 0
+                if not hasattr(ctx, '_dlv_base'):
+                    ctx['_dlv_base'] = {}
+                for tk, data in ml_cache.items():
+                    ltp = data.get('lastTradedPrice', 0)
+                    op = data.get('openPrice', 0) or 0
+                    vwap = data.get('avgPrice', 0) or 0
+                    dlv = data.get('deliveryPercentage', 0) or 0
+                    if not ltp or ltp <= 0 or op <= 0: continue
+                    total_ml += 1
+                    if ltp < op: ml_down += 1
+                    if vwap > 0 and ltp < vwap: ml_bv += 1
+                if total_ml > 100:
+                    ctx['ml_stocks_down_pct'] = round(ml_down / total_ml * 100, 1)
+                    ctx['ml_below_vwap_pct'] = round(ml_bv / total_ml * 100, 1)
+                    ctx['ml_total_stocks'] = total_ml
+            except Exception:
+                pass
+
             self.last_data = ctx
             return ctx
         except Exception as e:
