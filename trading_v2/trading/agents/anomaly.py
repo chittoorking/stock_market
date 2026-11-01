@@ -299,9 +299,9 @@ class AnomalyAgent(BaseAgent):
             if live_ltp <= 0:
                 live_ltp = ltp
 
-            # Position size: pool / 3 — fewer trades, bigger size, clean exits
-            per_trade = self._fm.pool / 3
-            qty = int(per_trade * 5 / live_ltp)
+            # Position size: 1% risk budget (same as all equity strategies)
+            sl_price = round(live_ltp * (1 + SL_PCT / 100), 2)
+            qty = self._fm.calc_equity_qty(live_ltp, sl_price)
             if qty < 1:
                 self._log.info(f'{sym}: qty=0, insufficient funds')
                 continue

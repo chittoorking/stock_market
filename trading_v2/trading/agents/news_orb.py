@@ -279,11 +279,13 @@ class NewsOrbAgent(BaseAgent):
                 self._log.warning(f'{sym}: no live price, skipping')
                 continue
 
-            # Position sizing
-            available = self._fm.available
-            # Position size: available / 3, max Rs 50K margin per trade
-            per_trade = min(available / 3, 50000)
-            qty = int(per_trade * 5 / live_ltp)
+            # Position sizing: 1% risk budget (same as all equity strategies)
+            sl_pct = 1.5
+            if direction == 'BUY':
+                _sl = round(live_ltp * (1 - sl_pct / 100), 2)
+            else:
+                _sl = round(live_ltp * (1 + sl_pct / 100), 2)
+            qty = self._fm.calc_equity_qty(live_ltp, _sl)
             if qty < 1:
                 continue
 
