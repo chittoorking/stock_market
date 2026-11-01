@@ -2,9 +2,9 @@
 
 Strategy decides trade size. Fund manager only checks:
   1. Is there enough balance?
-  2. Max 6 concurrent trades
-  3. Max 3 per strategy
-  4. Daily loss > 10% → kill switch
+  2. Max 7 concurrent trades
+  3. Max 5 per strategy
+  4. Daily loss > 5% → kill switch
 """
 import threading
 from datetime import datetime
@@ -81,10 +81,12 @@ class FundManager:
                 audit('fm', 'REJECT', symbol, strategy=strategy, reason='max_strategy')
                 return False, 0, ''
 
+            buffer = self.pool * 0.10
             deployed = sum(d['amount'] for d in self._deployed.values())
-            if self.pool - deployed < amount:
+            avail = self.pool - deployed - buffer
+            if avail < amount:
                 audit('fm', 'REJECT', symbol, strategy=strategy,
-                      reason=f'no_funds need={amount:.0f} avail={self.pool-deployed:.0f}')
+                      reason=f'no_funds need={amount:.0f} avail={avail:.0f}')
                 return False, 0, ''
 
             self._counter += 1
@@ -110,10 +112,11 @@ class FundManager:
 
     def status(self):
         with self._lock:
+            buffer = self.pool * 0.10
             deployed = sum(d['amount'] for d in self._deployed.values())
             return {
                 'pool': self.pool, 'deployed': round(deployed),
-                'available': round(self.pool - deployed),
+                'available': round(self.pool - deployed - buffer),
                 'daily_pnl': round(self._daily_pnl, 2),
                 'loss_hit': self._loss_hit,
                 'active': len(self._deployed),
