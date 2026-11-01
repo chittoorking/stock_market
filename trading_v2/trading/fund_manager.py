@@ -41,7 +41,7 @@ class FundManager:
                  f'equity_risk={EQUITY_RISK_PCT}% | loss_limit=Rs {self.daily_loss_limit:,.0f}')
 
     def calc_equity_qty(self, price, sl_price, lot_size=1):
-        """For equity strategies (News ORB, IPO): qty from 2% risk budget."""
+        """For equity strategies (News ORB, IPO): qty from EQUITY_RISK_PCT risk budget."""
         if price <= 0 or sl_price <= 0:
             return lot_size
         sl_dist = abs(price - sl_price)
