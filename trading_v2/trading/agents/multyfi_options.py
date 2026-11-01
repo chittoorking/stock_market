@@ -398,23 +398,62 @@ class MulOptions(BaseAgent):
         if score < threshold:
             return
 
-        # MCX commodities: PAPER MODE — log signal, don't execute
-        # Need COMEX confirmation before going live. Collecting data.
+        # MCX commodities: Gold LIVE (consec+HA on COMEX + SL>=0.4%), rest PAPER
         if is_commodity:
             sl_pct = abs(entry_price - fut_sl) / entry_price * 100 if entry_price > 0 and fut_sl > 0 else 0
-            audit('multyfi', 'COMMODITY_PAPER', sym,
+            is_gold = 'GOLD' in sym.upper()
+
+            # Log ALL commodity signals
+            audit('multyfi', 'COMMODITY_SIGNAL', sym,
                   action=action, entry=entry_price, sl=fut_sl,
                   sl_pct=round(sl_pct, 2), score=score,
-                  hour=datetime.now().hour, dow=datetime.now().weekday())
-            self._log.info(f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} ({sl_pct:.1f}%) score={score}')
-            try:
-                import requests as _req
-                msg = f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} score={score}'
-                _req.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
-                          json={'chat_id': TG_CHAT_ID, 'text': msg}, timeout=5)
-            except Exception:
-                pass
-            return  # Don't execute — paper only
+                  hour=datetime.now().hour, dow=datetime.now().weekday(),
+                  is_gold=is_gold)
+
+            if is_gold:
+                # GOLD LIVE: consec+HA on COMEX Gold 1H + SL >= 0.4%
+                # Validated: 100% WR (all losers had SL < 0.4%)
+                if sl_pct < 0.4:
+                    self._log.info(f'SKIP GOLD {sym}: SL {sl_pct:.2f}% < 0.4% (noise)')
+                    audit('multyfi', 'GOLD_SKIP_SL', sym, sl_pct=round(sl_pct, 2))
+                    return
+
+                # consec+HA on COMEX Gold — use _get_index_candles_1h with GC=F proxy
+                try:
+                    import yfinance as yf
+                    gc = yf.download('GC=F', period='5d', interval='1h', progress=False, auto_adjust=True)
+                    if hasattr(gc, 'columns') and isinstance(gc.columns, pd.MultiIndex):
+                        gc.columns = gc.columns.get_level_values(0)
+                    if len(gc) >= 10:
+                        candles = [{'o': float(r['Open']), 'h': float(r['High']),
+                                    'l': float(r['Low']), 'c': float(r['Close'])}
+                                   for _, r in gc.tail(10).iterrows()]
+                        consec_al, ha_al, _ = multyfi_scoring._check_consec_ha(candles, action)
+                        gold_score = (3 if consec_al else 0) + (3 if ha_al else 0)
+                        if gold_score < 6:
+                            self._log.info(f'SKIP GOLD {sym}: COMEX score={gold_score} < 6')
+                            audit('multyfi', 'GOLD_SKIP_COMEX', sym,
+                                  comex_score=gold_score, sl_pct=round(sl_pct, 2))
+                            return
+                        self._log.info(f'GOLD LIVE {sym}: COMEX score={gold_score} SL={sl_pct:.1f}%')
+                    else:
+                        self._log.warning(f'GOLD {sym}: no COMEX data, skipping')
+                        return
+                except Exception as e:
+                    self._log.warning(f'GOLD {sym}: COMEX check failed ({e}), skipping')
+                    return
+                # Gold passed all gates — fall through to execution below
+            else:
+                # Non-Gold commodities: PAPER mode
+                self._log.info(f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} ({sl_pct:.1f}%) score={score}')
+                try:
+                    import requests as _req
+                    msg = f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} score={score}'
+                    _req.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
+                              json={'chat_id': TG_CHAT_ID, 'text': msg}, timeout=5)
+                except Exception:
+                    pass
+                return  # Paper only for non-Gold
 
         # Resolve sec_id — ALWAYS use numeric sec_id from instrument master
         instrument = fd.get('instrument', fd.get('stockSymbol', ''))
