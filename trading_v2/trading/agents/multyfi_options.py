@@ -377,48 +377,23 @@ class MulOptions(BaseAgent):
         fut_sl = float(fd.get('stopLoss', fd.get('sl', 0)) or 0)
         action = str(fd.get('action', signal.get('action', 'BUY'))).upper()
 
-        # SL filter — MCX commodities have tighter SLs (0.2%), only filter NSE
-        if fut_sl > 0 and entry_price > 0 and not is_commodity:
-            sl_pct = abs(entry_price - fut_sl) / entry_price * 100
-            if sl_pct < 0.3:
-                self._log.info(f'SKIP {sym} futures: SL {sl_pct:.2f}% < 0.3%')
-                return
+        # Compute SL distance for all futures
+        sl_pct = abs(entry_price - fut_sl) / entry_price * 100 if entry_price > 0 and fut_sl > 0 else 0
 
-        # Score
         if is_commodity:
-            score = multyfi_scoring.score_mcx_commodity(signal, fd)
-            threshold = 4  # 90% WR on Silver+Gold
-        else:
-            score = multyfi_scoring.score_futures(signal, fd)
-            threshold = FUT_MIN_SCORE
-
-        audit('multyfi', 'FUTURES_SCORE', sym, score=score, threshold=threshold)
-        self._log.info(f'{sym} futures score={score} (min={threshold})')
-
-        if score < threshold:
-            return
-
-        # MCX commodities: Gold LIVE (consec+HA on COMEX + SL>=0.4%), rest PAPER
-        if is_commodity:
-            sl_pct = abs(entry_price - fut_sl) / entry_price * 100 if entry_price > 0 and fut_sl > 0 else 0
-            is_gold = 'GOLD' in sym.upper()
-
-            # Log ALL commodity signals
+            # ── MCX COMMODITIES ──
+            # Log every commodity signal
             audit('multyfi', 'COMMODITY_SIGNAL', sym,
                   action=action, entry=entry_price, sl=fut_sl,
-                  sl_pct=round(sl_pct, 2), score=score,
-                  hour=datetime.now().hour, dow=datetime.now().weekday(),
-                  is_gold=is_gold)
+                  sl_pct=round(sl_pct, 2),
+                  hour=datetime.now().hour, dow=datetime.now().weekday())
 
-            if is_gold:
-                # GOLD LIVE: consec+HA on COMEX Gold 1H + SL >= 0.4%
+            if 'GOLD' in sym.upper():
+                # GOLD: COMEX consec+HA on GC=F 1H + SL >= 0.4%
                 # Validated: 100% WR (all losers had SL < 0.4%)
                 if sl_pct < 0.4:
-                    self._log.info(f'SKIP GOLD {sym}: SL {sl_pct:.2f}% < 0.4% (noise)')
-                    audit('multyfi', 'GOLD_SKIP_SL', sym, sl_pct=round(sl_pct, 2))
+                    self._log.info(f'SKIP GOLD {sym}: SL {sl_pct:.2f}% < 0.4%')
                     return
-
-                # consec+HA on COMEX Gold — use _get_index_candles_1h with GC=F proxy
                 try:
                     import yfinance as yf
                     gc = yf.download('GC=F', period='5d', interval='1h', progress=False, auto_adjust=True)
@@ -429,30 +404,25 @@ class MulOptions(BaseAgent):
                                     'l': float(r['Low']), 'c': float(r['Close'])}
                                    for _, r in gc.tail(10).iterrows()]
                         consec_al, ha_al, _ = multyfi_scoring._check_consec_ha(candles, action)
-                        gold_score = (3 if consec_al else 0) + (3 if ha_al else 0)
-                        if gold_score < 6:
-                            self._log.info(f'SKIP GOLD {sym}: COMEX score={gold_score} < 6')
-                            audit('multyfi', 'GOLD_SKIP_COMEX', sym,
-                                  comex_score=gold_score, sl_pct=round(sl_pct, 2))
+                        if not (consec_al and ha_al):
+                            self._log.info(f'SKIP GOLD {sym}: COMEX not aligned (cc={consec_al} ha={ha_al})')
                             return
-                        self._log.info(f'GOLD LIVE {sym}: COMEX score={gold_score} SL={sl_pct:.1f}%')
+                        self._log.info(f'GOLD LIVE {sym}: COMEX confirmed, SL={sl_pct:.1f}%')
                     else:
-                        self._log.warning(f'GOLD {sym}: no COMEX data, skipping')
+                        self._log.warning(f'GOLD {sym}: no COMEX data, skip')
                         return
                 except Exception as e:
-                    self._log.warning(f'GOLD {sym}: COMEX check failed ({e}), skipping')
+                    self._log.warning(f'GOLD {sym}: COMEX failed ({e}), skip')
                     return
-                # Gold passed all gates — fall through to execution below
+
             elif 'SILVER' in sym.upper():
-                # SILVER LIVE: consec+HA on COMEX Silver + no Tuesday + SL >= 0.3%
+                # SILVER: COMEX consec+HA on SI=F 1H + no Tuesday + SL >= 0.3%
                 # Validated: 18W 0L = 100% WR
                 if datetime.now().weekday() == 1:
-                    self._log.info(f'SKIP SILVER {sym}: Tuesday (NIFTY expiry whipsaws MCX)')
-                    audit('multyfi', 'SILVER_SKIP_TUE', sym)
+                    self._log.info(f'SKIP SILVER {sym}: Tuesday')
                     return
                 if sl_pct < 0.3:
-                    self._log.info(f'SKIP SILVER {sym}: SL {sl_pct:.2f}% < 0.3% (noise)')
-                    audit('multyfi', 'SILVER_SKIP_SL', sym, sl_pct=round(sl_pct, 2))
+                    self._log.info(f'SKIP SILVER {sym}: SL {sl_pct:.2f}% < 0.3%')
                     return
                 try:
                     import yfinance as yf
@@ -464,31 +434,41 @@ class MulOptions(BaseAgent):
                                     'l': float(r['Low']), 'c': float(r['Close'])}
                                    for _, r in si.tail(10).iterrows()]
                         consec_al, ha_al, _ = multyfi_scoring._check_consec_ha(candles, action)
-                        silver_score = (3 if consec_al else 0) + (3 if ha_al else 0)
-                        if silver_score < 6:
-                            self._log.info(f'SKIP SILVER {sym}: COMEX score={silver_score} < 6')
-                            audit('multyfi', 'SILVER_SKIP_COMEX', sym,
-                                  comex_score=silver_score, sl_pct=round(sl_pct, 2))
+                        if not (consec_al and ha_al):
+                            self._log.info(f'SKIP SILVER {sym}: COMEX not aligned (cc={consec_al} ha={ha_al})')
                             return
-                        self._log.info(f'SILVER LIVE {sym}: COMEX score={silver_score} SL={sl_pct:.1f}%')
+                        self._log.info(f'SILVER LIVE {sym}: COMEX confirmed, SL={sl_pct:.1f}%')
                     else:
-                        self._log.warning(f'SILVER {sym}: no COMEX data, skipping')
+                        self._log.warning(f'SILVER {sym}: no COMEX data, skip')
                         return
                 except Exception as e:
-                    self._log.warning(f'SILVER {sym}: COMEX check failed ({e}), skipping')
+                    self._log.warning(f'SILVER {sym}: COMEX failed ({e}), skip')
                     return
-                # Silver passed all gates — fall through to execution below
+
             else:
-                # Non-Gold/Silver commodities: PAPER mode
-                self._log.info(f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} ({sl_pct:.1f}%) score={score}')
+                # Crude/NatGas: PAPER — log and skip
+                self._log.info(f'PAPER MCX {action} {sym} @ {entry_price} SL={sl_pct:.1f}%')
                 try:
                     import requests as _req
-                    msg = f'PAPER MCX {action} {sym} @ {entry_price} SL={fut_sl} score={score}'
                     _req.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
-                              json={'chat_id': TG_CHAT_ID, 'text': msg}, timeout=5)
+                              json={'chat_id': TG_CHAT_ID,
+                                    'text': f'PAPER MCX {action} {sym} @ {entry_price} SL={sl_pct:.1f}%'},
+                              timeout=5)
                 except Exception:
                     pass
-                return  # Paper only for Crude/NatGas
+                return
+
+        else:
+            # ── NSE FUTURES ──
+            if sl_pct < 0.3:
+                self._log.info(f'SKIP {sym} futures: SL {sl_pct:.2f}% < 0.3%')
+                return
+
+            score = multyfi_scoring.score_futures(signal, fd)
+            audit('multyfi', 'FUTURES_SCORE', sym, score=score, threshold=FUT_MIN_SCORE)
+            self._log.info(f'{sym} futures score={score} (min={FUT_MIN_SCORE})')
+            if score < FUT_MIN_SCORE:
+                return
 
         # Resolve sec_id — ALWAYS use numeric sec_id from instrument master
         instrument = fd.get('instrument', fd.get('stockSymbol', ''))
