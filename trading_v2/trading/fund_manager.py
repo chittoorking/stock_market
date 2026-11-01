@@ -6,6 +6,7 @@ Strategy decides trade size. Fund manager only checks:
   3. Max 5 per strategy
   4. Daily loss > 5% → kill switch
 """
+import re
 import threading
 from datetime import datetime
 
@@ -32,8 +33,10 @@ class FundManager:
 
         self.daily_loss_limit = self.pool * DAILY_LOSS_PCT / 100
         self._deployed = {}
-        self._daily_pnl = 0.0
-        self._loss_hit = False
+        self._daily_pnl_equity = 0.0
+        self._daily_pnl_fno = 0.0
+        self._loss_hit_equity = False
+        self._loss_hit_fno = False
         self._counter = 0
         self._lock = threading.Lock()
 
@@ -69,7 +72,20 @@ class FundManager:
     def request(self, strategy, symbol, amount, conviction=5):
         """Strategy says how much it needs. FM just checks if possible."""
         with self._lock:
-            if self._loss_hit:
+            # Separate kill switches: check if THIS trade's segment is blocked
+            _sym_upper = symbol.upper()
+            _is_fno = (
+                _sym_upper.endswith('FUT') or
+                bool(re.search(r'\d+CE$', _sym_upper)) or
+                bool(re.search(r'\d+PE$', _sym_upper)) or
+                'GOLDM' in _sym_upper or
+                'SILVERM' in _sym_upper
+            )
+            if _is_fno and self._loss_hit_fno:
+                audit('fm', 'REJECT', symbol, strategy=strategy, reason='fno_loss_limit')
+                return False, 0, ''
+            if not _is_fno and self._loss_hit_equity:
+                audit('fm', 'REJECT', symbol, strategy=strategy, reason='equity_loss_limit')
                 return False, 0, ''
 
             if len(self._deployed) >= MAX_TOTAL:
@@ -104,10 +120,25 @@ class FundManager:
             entry = self._deployed.pop(trade_id, None)
             if not entry:
                 return
-            self._daily_pnl += pnl
-            if self._daily_pnl <= -self.daily_loss_limit:
-                self._loss_hit = True
-                log.error(f'LOSS LIMIT: {self._daily_pnl:.0f}')
+            # Separate equity vs F&O PnL tracking
+            _sym_upper = entry.get('sym', '').upper()
+            _is_fno = (
+                _sym_upper.endswith('FUT') or
+                bool(re.search(r'\d+CE$', _sym_upper)) or
+                bool(re.search(r'\d+PE$', _sym_upper)) or
+                'GOLDM' in _sym_upper or
+                'SILVERM' in _sym_upper
+            )
+            if _is_fno:
+                self._daily_pnl_fno += pnl
+                if self._daily_pnl_fno <= -self.daily_loss_limit:
+                    self._loss_hit_fno = True
+                    log.error(f'FnO LOSS LIMIT: {self._daily_pnl_fno:.0f}')
+            else:
+                self._daily_pnl_equity += pnl
+                if self._daily_pnl_equity <= -self.daily_loss_limit:
+                    self._loss_hit_equity = True
+                    log.error(f'EQUITY LOSS LIMIT: {self._daily_pnl_equity:.0f}')
         audit('fm', 'RELEASE', entry['sym'], trade_id=trade_id, pnl=round(pnl, 2))
 
     def status(self):
@@ -117,15 +148,20 @@ class FundManager:
             return {
                 'pool': self.pool, 'deployed': round(deployed),
                 'available': round(self.pool - deployed - buffer),
-                'daily_pnl': round(self._daily_pnl, 2),
-                'loss_hit': self._loss_hit,
+                'daily_pnl_equity': round(self._daily_pnl_equity, 2),
+                'daily_pnl_fno': round(self._daily_pnl_fno, 2),
+                'daily_pnl': round(self._daily_pnl_equity + self._daily_pnl_fno, 2),
+                'loss_hit_equity': self._loss_hit_equity,
+                'loss_hit_fno': self._loss_hit_fno,
                 'active': len(self._deployed),
             }
 
     def reset_daily(self):
         with self._lock:
-            self._daily_pnl = 0
-            self._loss_hit = False
+            self._daily_pnl_equity = 0
+            self._daily_pnl_fno = 0
+            self._loss_hit_equity = False
+            self._loss_hit_fno = False
             # Don't clear _deployed — other agents may have overnight positions
         try:
             import sys, os
