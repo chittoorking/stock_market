@@ -18,7 +18,7 @@ Entry 3 — 13:12 / 14:12 (PAPER mode, log only)
 
 Execution: LIMIT DAY at LTP * 0.998 (0.2% thesis confirmation), 5-min fill window, cancel unfilled.
 Liquidity: yfinance avg10d >= 5000 (skip illiquid stocks). Size: pool/3 per trade.
-Exit: SL 2%, trail activate 1.0% / trail 0.5%, EOD 3:10 PM.
+Exit: SL 1.5%, trail activate 1.0% / trail 0.5%, EOD 3:10 PM.
 
 Anomaly score (0-8, all sector-relative):
   +1 residual > 3%    +1 residual > 5%    +1 volatility > 1.3x
@@ -42,12 +42,7 @@ log = get_logger('anomaly')
 
 # Heartbeat scans - when to scan for anomalies
 ENTRY_TIMES = [
-    (9, 20),   # after ORB, first scan
-    (10, 12),  # delivery update - second scan
-    (11, 12),  # late pullback - third scan
-    (12, 12),  # fourth scan
-    (13, 12),  # afternoon - paper mode
-    (14, 12),  # afternoon - paper mode
+    (9, 20),   # only scan - 9:20 small-cap fake gaps
 ]
 
 MAX_TRADES = 10
@@ -91,7 +86,7 @@ class AnomalyAgent(BaseAgent):
 
     def _run_day(self):
         now = datetime.now()
-        if now.hour >= 14 or now.weekday() >= 5:
+        if now.hour >= 10 or now.weekday() >= 5:
             self._log.info('Past 2 PM or weekend, skipping')
             return
 
@@ -124,10 +119,8 @@ class AnomalyAgent(BaseAgent):
         self._log.info('=== ANOMALY AGENT DONE ===')
 
     def _scan_and_trade(self):
-        """Fetch all stocks. 9:20 uses anomaly score. 10:12 uses pullback rule."""
+        """Fetch all stocks at 9:20. Score and filter for fake gaps."""
         now = datetime.now()
-        is_first_scan = now.hour == 9  # 9:20 scan
-        is_second_scan = now.hour in (10, 11, 12, 13, 14)  # 10:12 and 11:12 scan
         # Fetch Market Lens data
         stocks = self._fetch_market_lens()
         if not stocks:
@@ -196,7 +189,7 @@ class AnomalyAgent(BaseAgent):
             if s['nm'] < 0 and s['ocf'] <= 0: score += 1
             s['anomaly_score'] = score
 
-        if is_first_scan:
+        if True:  # 9:20 scan only
             # 9:20: gain>4% + residual<=13 + anomaly_score>=5
             candidates = [s for s in stocks
                           if s['anomaly_score'] >= MIN_ANOMALY_SCORE
@@ -222,95 +215,6 @@ class AnomalyAgent(BaseAgent):
             candidates = [s for s in candidates
                           if (s.get('wk', 0) - s.get('gain_from_prev', 0)) < 10]
             candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
-        elif is_second_scan:
-            # 10:12: gain 5-10% + pullback>1% + below VWAP>0.5% + delivery<40% + OCF<100
-            candidates = []
-            for s in stocks:
-                if self._positions.find_by_symbol(s['ticker']): continue
-                if s['ticker'] in self._sl_hit: continue
-                if s['ltp'] < MIN_PRICE: continue
-                # Only short weak fundamentals (OCF < 100)
-                # If OCF missing (0), block high-delivery stocks as safety
-                _ocf = s.get("ocf", 0) or 0
-                if _ocf >= 100:
-                    audit("anomaly", "SKIP_HIGH_OCF", s["ticker"],
-                          gain=round(s.get("gain_from_prev", 0), 1), ocf=round(_ocf))
-                    continue
-                if _ocf == 0 and s.get("dlv", 0) > 50:
-                    audit("anomaly", "SKIP_NO_OCF_HIGH_DLV", s["ticker"],
-                          gain=round(s.get("gain_from_prev", 0), 1), dlv=round(s.get("dlv", 0), 1))
-                    continue
-                gain = s.get('gain_from_prev', 0)
-                # Minimum anomaly score for pullback
-                if s.get("anomaly_score", 0) < 3:
-                    audit("anomaly", "SKIP_LOW_SCORE", s["ticker"],
-                          gain=round(gain, 1), score=s.get("anomaly_score", 0))
-                    continue
-                if gain < 5 or gain > 10: continue
-                # Pullback from day high
-                dh = s.get('day_high', 0)
-                if dh <= 0: continue
-                pullback = (dh - s['ltp']) / dh * 100
-                if pullback < 1: continue
-                # Below VWAP
-                vwap = s.get('vwap', 0)
-                if vwap <= 0: continue
-                below_vwap = (vwap - s['ltp']) / vwap * 100
-                if below_vwap < 0.5: continue
-                # Delivery < 40%
-                dlv = s.get('dlv', 0)
-                if dlv >= 40:
-                    # Log but skip
-                    audit('anomaly', 'SKIP_HIGH_DLV', s['ticker'],
-                          gain=round(gain, 1), pullback=round(pullback, 1),
-                          below_vwap=round(below_vwap, 2), dlv=round(dlv, 1))
-                    continue
-                s['pullback'] = pullback
-                s['below_vwap'] = below_vwap
-                # Max bounce < 2.5% (gradual fade, not choppy)
-                mb = price_tracker.get_max_bounce(s['ticker'])
-                if mb >= 2.5:
-                    audit('anomaly', 'SKIP_CHOPPY', s['ticker'],
-                          gain=round(gain, 1), max_bounce=round(mb, 1))
-                    continue
-                # fr200 < 20% (not in strong uptrend)
-                dma200 = s.get('dma200', 0)
-                if dma200 > 0:
-                    fr200 = (s['ltp'] - dma200) / dma200 * 100
-                    if fr200 >= 20:
-                        audit('anomaly', 'SKIP_UPTREND', s['ticker'],
-                              gain=round(gain, 1), fr200=round(fr200, 1))
-                        continue
-                # 6M return < 50% (not a stock that doubled recently)
-                sixm = s.get('sixm', 0)
-                if sixm >= 50:
-                    audit('anomaly', 'SKIP_6M_MOMENTUM', s['ticker'],
-                          gain=round(gain, 1), sixm=round(sixm, 1))
-                    continue
-                # Circuit filter: skip if upper circuit < entry + 2.5%
-                uc = s.get('upper_circuit', 0)
-                if uc > 0 and uc < s['ltp'] * 1.025:
-                    audit('anomaly', 'SKIP_CIRCUIT', s['ticker'],
-                          gain=round(gain, 1), ltp=s['ltp'], upper_circuit=uc)
-                    continue
-                # Skip multi-day momentum: 10%+ gain in prior 4 days = circuit continuation
-                prior_4d = s.get('wk', 0) - gain
-                if prior_4d > 10:
-                    audit('anomaly', 'SKIP_MOMENTUM', s['ticker'],
-                          gain=round(gain, 1), wk=round(s.get('wk', 0), 1), prior_4d=round(prior_4d, 1))
-                    continue
-                # Gap <= 7%: if gap still holding 7%+ by now, it's real — don't fight it
-                if s.get('gap', 0) > 7:
-                    audit('anomaly', 'SKIP_GAP_TOO_HIGH', s['ticker'],
-                          gain=round(gain, 1), gap=round(s.get('gap', 0), 2))
-                    continue
-                # Residual >= 0: only short stocks that outperformed their sector
-                if s.get('residual', 0) < 0:
-                    audit('anomaly', 'SKIP_NEG_RESIDUAL', s['ticker'],
-                          gain=round(gain, 1), residual=round(s.get('residual', 0), 1))
-                    continue
-                candidates.append(s)
-            candidates.sort(key=lambda x: (-x['pullback'], -x['below_vwap']))
         else:
             candidates = []
 
@@ -328,30 +232,11 @@ class AnomalyAgent(BaseAgent):
 
         # Log all candidates
         for s in candidates[:10]:
-            extra = {}
-            if is_second_scan:
-                extra = {'pullback': round(s.get('pullback', 0), 1),
-                          'below_vwap': round(s.get('below_vwap', 0), 2),
-                          'gain': round(s.get('gain_from_prev', 0), 1)}
             audit('anomaly', 'CANDIDATE', s['ticker'],
                   score=s.get('anomaly_score', 0), residual=round(s.get('residual', 0), 1),
                   gap=round(s['gap'], 2), sector=s['sector'],
                   dlv=round(s.get('dlv', 0), 1), ltp=s['ltp'],
-                  scan=f'{now.hour}:{now.minute:02d}', **extra)
-
-        # ALL pullback scans = paper mode (0% WR on live, need more data)
-        if is_second_scan:
-            for s in to_trade:
-                audit('anomaly', 'PAPER_PULLBACK', s['ticker'],
-                      score=s.get('anomaly_score', 0), residual=round(s.get('residual', 0), 1),
-                      gap=round(s['gap'], 2), sector=s['sector'],
-                      dlv=round(s.get('dlv', 0), 1), ltp=s['ltp'],
-                      scan=f'{now.hour}:{now.minute:02d}',
-                      pullback=round(s.get('pullback', 0), 1),
-                      below_vwap=round(s.get('below_vwap', 0), 2),
-                      gain=round(s.get('gain_from_prev', 0), 1))
-                self._log.info(f'PAPER AFTERNOON: {s["ticker"]} gain={s.get("gain_from_prev",0):+.1f}%')
-            return
+                  scan=f'{now.hour}:{now.minute:02d}')
 
         # Place all orders at once, then wait and check fills
         self._place_and_fill(to_trade)
