@@ -17,6 +17,55 @@ from trading.config import (PE_MIN_SCORE, CE_MIN_SCORE, FUT_MIN_SCORE,
                            OPTIONS_SL_PCT, MCX_COMMODITIES, TG_TOKEN, TG_CHAT_ID)
 
 
+
+def _get_market_structure():
+    """Snapshot market breadth from ML scan data.
+    Returns: {stocks_down_pct, below_vwap_pct, dlv_rising_pct} or None."""
+    try:
+        from trading.services.ml_enricher import _poll, _cache
+        import trading.services.ml_enricher as mle
+        mle._cache_time = 0
+        _poll()
+
+        total = 0; down = 0; below_vwap = 0; dlv_rising = 0
+        # Track per-stock delivery baseline
+        if not hasattr(_get_market_structure, '_dlv_base'):
+            _get_market_structure._dlv_base = {}
+
+        for ticker, data in mle._cache.items():
+            ltp = data.get('lastTradedPrice', 0)
+            op = data.get('openPrice', 0) or 0
+            prev = data.get('previousClose', 0)
+            vwap = data.get('avgPrice', 0) or 0
+            dlv = data.get('deliveryPercentage', 0) or 0
+
+            if not ltp or ltp <= 0 or not prev or prev <= 0 or op <= 0:
+                continue
+
+            total += 1
+            if ltp < op: down += 1
+            if vwap > 0 and ltp < vwap: below_vwap += 1
+
+            # Delivery change tracking
+            if dlv > 0:
+                if ticker not in _get_market_structure._dlv_base:
+                    _get_market_structure._dlv_base[ticker] = dlv
+                if dlv > _get_market_structure._dlv_base[ticker]:
+                    dlv_rising += 1
+
+        if total < 100:
+            return None
+
+        return {
+            'stocks_down_pct': down / total * 100,
+            'below_vwap_pct': below_vwap / total * 100,
+            'dlv_rising_pct': dlv_rising / total * 100,
+            'total_stocks': total,
+        }
+    except Exception as e:
+        return None
+
+
 class MulOptions(BaseAgent):
     name = 'multyfi_options'
     PAPER_MODE = False  # LIVE — consec+ha filter active  # Log signals but don't place orders
@@ -462,11 +511,54 @@ class MulOptions(BaseAgent):
         audit('multyfi', 'OPTION_SCORE', sym, opt_type=opt_type,
               score=score, threshold=threshold, direction=action)
 
+        # Get market structure for logging + gate
+        mkt = _get_market_structure()
+        mkt_log = {}
+        if mkt:
+            mkt_log = {
+                'stocks_down': round(mkt['stocks_down_pct'], 1),
+                'below_vwap': round(mkt['below_vwap_pct'], 1),
+                'dlv_rising': round(mkt['dlv_rising_pct'], 1),
+            }
+
+        # LOG EVERY SIGNAL with market structure (even if skipped)
+        audit('multyfi', 'OPTION_SIGNAL_FULL', sym,
+              opt_type=opt_type, action=action, score=score,
+              entry=entry_price, threshold=threshold,
+              **mkt_log, **{k: round(v, 2) if isinstance(v, float) else v
+                          for k, v in sig.items() if k in ('target_pct', 'sl', 'strike', 'expiry')})
+
         if score < threshold:
             self._log.info(f'SKIP {sym} {opt_type} score={score} (min={threshold})')
             return
 
-        self._log.info(f'TAKE {sym} {opt_type} score={score} (min={threshold})')
+        # Market structure gate for options
+        # Bearish bet (PE BUY or CE SELL): need stocks_down>75% + below_vwap>70%
+        # Bullish bet (CE BUY or PE SELL): need stocks_down<40% + below_vwap<50% + dlv_rising>75%
+        is_bearish = (opt_type == 'PE' and action == 'BUY') or (opt_type == 'CE' and action == 'SELL')
+        is_bullish = (opt_type == 'CE' and action == 'BUY') or (opt_type == 'PE' and action == 'SELL')
+
+        if mkt:
+            if is_bearish:
+                if mkt['stocks_down_pct'] < 75 or mkt['below_vwap_pct'] < 70:
+                    self._log.info(f'SKIP {sym} {opt_type} {action}: market not bearish enough '
+                                   f'(down={mkt["stocks_down_pct"]:.0f}% vwap={mkt["below_vwap_pct"]:.0f}%)')
+                    audit('multyfi', 'OPTION_SKIP_MKT', sym, opt_type=opt_type, action=action,
+                          reason='not_bearish', **mkt_log)
+                    return
+            elif is_bullish:
+                if mkt['stocks_down_pct'] > 40 or mkt['below_vwap_pct'] > 50 or mkt['dlv_rising_pct'] < 75:
+                    self._log.info(f'SKIP {sym} {opt_type} {action}: market not bullish enough '
+                                   f'(down={mkt["stocks_down_pct"]:.0f}% vwap={mkt["below_vwap_pct"]:.0f}% dlv={mkt["dlv_rising_pct"]:.0f}%)')
+                    audit('multyfi', 'OPTION_SKIP_MKT', sym, opt_type=opt_type, action=action,
+                          reason='not_bullish', **mkt_log)
+                    return
+        else:
+            self._log.warning(f'{sym}: no market structure data, skipping option')
+            return
+
+        self._log.info(f'TAKE {sym} {opt_type} score={score} mkt_confirmed '
+                       f'(down={mkt["stocks_down_pct"]:.0f}% vwap={mkt["below_vwap_pct"]:.0f}% dlv={mkt["dlv_rising_pct"]:.0f}%)')
 
         # Resolve instrument to numeric sec_id
         sec_id, premium = symbol_resolver.resolve_option_sec_id(
