@@ -118,7 +118,7 @@ class PositionManager:
         # Sell FIRST — don't remove position until confirmed
         sell_ok = True
         if not skip_sell:
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     if pos.side == Side.BUY:
                         if pos.fno_sec_id:
@@ -126,7 +126,7 @@ class PositionManager:
                         else:
                             # Progressive LIMIT: 0.05% -> 0.075% -> 0.1%
                             ltp = self._broker.ltp_safe(pos.symbol)
-                            _buf = [0.9995, 0.99925, 0.999][min(attempt, 2)]
+                            _buf = [0.9997, 0.9995, 0.99925, 0.999, 0.9985][min(attempt, 4)]
                             exit_price = round(ltp * _buf, 2) if ltp > 0 else 0
                             oid = self._broker.sell(pos.symbol, pos.qty, price=exit_price,
                                                      order_type='LIMIT')
@@ -136,7 +136,7 @@ class PositionManager:
                         else:
                             # Progressive LIMIT: 0.05% -> 0.075% -> 0.1%
                             ltp = self._broker.ltp_safe(pos.symbol)
-                            _buf = [1.0005, 1.00075, 1.001][min(attempt, 2)]
+                            _buf = [1.0003, 1.0005, 1.00075, 1.001, 1.0015][min(attempt, 4)]
                             exit_price = round(ltp * _buf, 2) if ltp > 0 else 0
                             oid = self._broker.buy(pos.symbol, pos.qty, price=exit_price,
                                                     order_type='LIMIT')
@@ -145,11 +145,11 @@ class PositionManager:
                         break
                     else:
                         log.error(f'EXIT ORDER RETURNED NONE: {pos.symbol} attempt={attempt+1}')
-                        if attempt < 2:
+                        if attempt < 4:
                             import time; time.sleep(2)
                 except Exception as e:
                     log.critical(f'EXIT ORDER FAILED {pos.symbol} attempt={attempt+1}: {e}')
-                    if attempt < 2:
+                    if attempt < 4:
                         import time; time.sleep(2)
             else:
                 sell_ok = False
