@@ -260,8 +260,8 @@ class Monitor:
                         else:
                             _charge_floor = entry
                         _trail_sl = peak * (1 - pos.trail_pct / 100)
-                        if _trail_sl < _charge_floor:
-                            _trail_sl = _charge_floor
+                        # charge floor disabled — slippage risk outweighs charge protection
+                        # _trail_sl = _charge_floor
                         # Update exchange GTT to match trail SL
                         _gtt_id = str(getattr(pos, 'gtt_sl_id', ''))
                         if _gtt_id and hasattr(self, '_broker'):
@@ -308,8 +308,8 @@ class Monitor:
                         else:
                             _charge_floor = entry
                         _trail_sl = peak * (1 + pos.trail_pct / 100)
-                        if _trail_sl > _charge_floor:
-                            _trail_sl = _charge_floor
+                        # charge floor disabled
+                        # _trail_sl = _charge_floor
                         # Update exchange GTT to match trail SL
                         _gtt_id = str(getattr(pos, 'gtt_sl_id', ''))
                         if _gtt_id and hasattr(self, '_broker'):
@@ -518,12 +518,12 @@ class Monitor:
                                     _cf = entry - (_ch * 1.3 / pos.qty)
                             if pos.side == Side.BUY:
                                 _tsl = peak * (1 - pos.trail_pct / 100)
-                                if _tsl < _cf: _tsl = _cf
+                                pass  # charge floor disabled
                                 if price <= _tsl:
                                     self._exit(pos.id, price, 'TRAIL_EXIT')
                             else:
                                 _tsl = peak * (1 + pos.trail_pct / 100)
-                                if _tsl > _cf: _tsl = _cf
+                                pass  # charge floor disabled
                                 if price >= _tsl:
                                     self._exit(pos.id, price, 'TRAIL_EXIT')
                 except Exception as e:

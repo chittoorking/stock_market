@@ -124,18 +124,18 @@ class PositionManager:
                         if pos.fno_sec_id:
                             oid = self._broker.sell_fno(pos.symbol, pos.qty, pos.fno_sec_id)
                         else:
-                            # LIMIT at 0.5% below LTP for SELL exit
+                            # LIMIT at 0.1% below LTP for SELL exit
                             ltp = self._broker.ltp_safe(pos.symbol)
-                            exit_price = round(ltp * 0.995, 2) if ltp > 0 else 0
+                            exit_price = round(ltp * 0.999, 2) if ltp > 0 else 0
                             oid = self._broker.sell(pos.symbol, pos.qty, price=exit_price,
                                                      order_type='LIMIT')
                     else:
                         if pos.fno_sec_id:
                             oid = self._broker.buy_fno(pos.symbol, pos.qty, pos.fno_sec_id)
                         else:
-                            # LIMIT at 0.5% above LTP for BUY exit
+                            # LIMIT at 0.1% above LTP for BUY exit
                             ltp = self._broker.ltp_safe(pos.symbol)
-                            exit_price = round(ltp * 1.005, 2) if ltp > 0 else 0
+                            exit_price = round(ltp * 1.001, 2) if ltp > 0 else 0
                             oid = self._broker.buy(pos.symbol, pos.qty, price=exit_price,
                                                     order_type='LIMIT')
                     if oid:
