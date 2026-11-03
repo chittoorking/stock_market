@@ -66,19 +66,36 @@ def collect_range(broker, symbols: list[str], poll_seconds: int = 15) -> dict:
                 r = (data[sym]['high'] - data[sym]['low']) / data[sym]['open'] * 100 if data[sym]['open'] > 0 else 0
                 log.info(f'OR {sym}: H={data[sym]["high"]:.1f} L={data[sym]["low"]:.1f} R={r:.1f}% (candle)')
             else:
-                price = broker.ltp_safe(sym)
+                # Candles empty — retry LTP 3 times
+                price = 0
+                for _retry in range(3):
+                    price = broker.ltp_safe(sym)
+                    if price > 0:
+                        break
+                    import time; time.sleep(2)
                 if price > 0:
                     data[sym]['open'] = price
                     data[sym]['high'] = price
                     data[sym]['low'] = price
-                    log.warning(f'OR {sym}: candle failed, using LTP {price:.1f}')
+                    log.warning(f'OR {sym}: candle empty, LTP fallback {price:.1f}')
+                else:
+                    log.error(f'OR {sym}: candle empty + LTP failed')
         except Exception as e:
-            log.warning(f'OR {sym}: candle error ({e}), using LTP')
-            price = broker.ltp_safe(sym)
+            log.warning(f'OR {sym}: candle error ({e}), trying LTP')
+            # Retry LTP 3 times with 2s gap
+            price = 0
+            for _retry in range(3):
+                price = broker.ltp_safe(sym)
+                if price > 0:
+                    break
+                import time; time.sleep(2)
             if price > 0:
                 data[sym]['open'] = price
                 data[sym]['high'] = price
                 data[sym]['low'] = price
+                log.info(f'OR {sym}: LTP fallback {price:.1f} (retry {_retry+1})')
+            else:
+                log.error(f'OR {sym}: ALL LTP retries failed — no OR data')
 
     return data
 
