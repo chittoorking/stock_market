@@ -158,8 +158,10 @@ class MulOptions(BaseAgent):
         entry_price = opt.get('entryPrice', 0)
         entry_date = opt.get('entryDate', '')
 
-        if not base or not opt_type:
+        if not base:
             return
+        # opt_type can be None/empty for equity signals — don't drop them
+        opt_type = opt_type or ""
 
         symbol = base.replace(' 50', '').replace(' ', '').strip().upper()
         if len(symbol) < 3:
@@ -189,12 +191,22 @@ class MulOptions(BaseAgent):
             'expiry': opt.get('expiryDate', opt.get('expiry', '')),
         }
 
-        # Route to handler (scoring happens inside _handle_option / _handle_futures)
+        # Route to handler
         if is_commodity:
             return  # Commodity options not traded, only futures via _route_signal
         fd = dict(opt)
         fd['action'] = action
-        self._handle_option(symbol, signal, fd, is_commodity, opt_type)
+
+        is_future = 'FUT' in symbol or opt_type == 'FUT'
+        is_option = opt_type in ('CE', 'PE')
+
+        if is_future:
+            self._handle_futures(symbol, signal, fd, is_commodity)
+        elif is_option:
+            self._handle_option(symbol, signal, fd, is_commodity, opt_type)
+        else:
+            # Equity stock signal from premium endpoint (optionType empty/None)
+            self._handle_equity(symbol, signal, fd)
 
     def _handle_stream(self, stream: dict):
         """Route stream item — EXIT or NEW RECOMMENDATION."""
