@@ -83,13 +83,26 @@ class Monitor:
             else:
                 equity_syms.append(p.symbol)
 
-        # Batch LTP for equity
+        # Equity LTP: WebSocket first, REST batch fallback
         prices = {}
-        if equity_syms:
+        ws_miss = []
+        if equity_syms and self._pf:
+            for sym in set(equity_syms):
+                wp = self._pf.get_ltp(sym)
+                if wp and wp > 0:
+                    prices[sym] = wp
+                else:
+                    ws_miss.append(sym)
+        else:
+            ws_miss = list(set(equity_syms))
+
+        # REST fallback for any WebSocket misses
+        if ws_miss:
             try:
                 from trading.broker import _retry
-                prices = _retry(lambda: self._broker._api.get_ltp(list(set(equity_syms))),
-                                retries=3, delay=2, label='BATCH_LTP')
+                rest_prices = _retry(lambda: self._broker._api.get_ltp(ws_miss),
+                                     retries=3, delay=2, label='BATCH_LTP')
+                prices.update(rest_prices)
             except Exception as e:
                 log.warning(f'Batch LTP failed after retries: {e}')
 

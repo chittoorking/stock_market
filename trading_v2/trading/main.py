@@ -93,11 +93,13 @@ def main():
     monitor = Monitor(broker, positions, fm, poll_interval=args.poll, price_feed=pf)
     monitor.start()
 
-    # Auto-subscribe F&O positions to WebSocket when opened
-    def _on_fno_open(pos):
+    # Auto-subscribe ALL positions to WebSocket when opened
+    def _on_pos_open(pos):
         if getattr(pos, 'fno_sec_id', ''):
             pf.subscribe_fno([pos.fno_sec_id])
-    positions._on_open_callback = _on_fno_open
+        else:
+            pf.subscribe([pos.symbol])
+    positions._on_open_callback = _on_pos_open
 
     # Agents
     loaded = []
