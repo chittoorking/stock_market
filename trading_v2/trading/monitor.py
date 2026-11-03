@@ -171,6 +171,38 @@ class Monitor:
         if pos and pos.trade_id:
             self._fm.release(pos.trade_id, pnl=pos.pnl)
 
+    def on_price(self, instrument: str, price: float):
+        """Called by WebSocket on every tick. Check SL/trail instantly."""
+        if price <= 0 or not self._running:
+            return
+        # Map instrument (NSE:2885 or NFO:61515) to position symbol
+        active = self._pos.active()
+        if not active:
+            return
+        for pos in active:
+            # Match by scrip code or fno sec_id
+            fno_id = getattr(pos, 'fno_sec_id', '')
+            if fno_id and f'NFO:{fno_id}' == instrument:
+                try:
+                    self._check(pos, price)
+                except Exception:
+                    pass
+                return
+            # Equity: instrument = NSE:sec_id, need to match symbol
+            if not fno_id and hasattr(self, '_sym_to_instrument'):
+                if self._sym_to_instrument.get(pos.symbol) == instrument:
+                    try:
+                        self._check(pos, price)
+                    except Exception:
+                        pass
+                    return
+
+    def register_symbol(self, symbol: str, instrument: str):
+        """Map symbol to WebSocket instrument key for real-time matching."""
+        if not hasattr(self, '_sym_to_instrument'):
+            self._sym_to_instrument = {}
+        self._sym_to_instrument[symbol] = instrument
+
     def force_exit(self, symbol: str, reason: str = 'SIGNAL_EXIT',
                    strategy: str = None) -> bool:
         """Close position for symbol. If strategy is given, only close that strategy's position."""

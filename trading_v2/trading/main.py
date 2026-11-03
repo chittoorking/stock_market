@@ -93,12 +93,20 @@ def main():
     monitor = Monitor(broker, positions, fm, poll_interval=args.poll, price_feed=pf)
     monitor.start()
 
+    # Wire WebSocket -> Monitor for real-time tick checking
+    pf._on_price = monitor.on_price
+
     # Auto-subscribe ALL positions to WebSocket when opened
     def _on_pos_open(pos):
         if getattr(pos, 'fno_sec_id', ''):
             pf.subscribe_fno([pos.fno_sec_id])
         else:
             pf.subscribe([pos.symbol])
+            # Register symbol -> instrument mapping for real-time matching
+            scrip = broker._api.SCRIP_CODES.get(pos.symbol, '')
+            if scrip:
+                instrument = scrip.replace('_', ':')
+                monitor.register_symbol(pos.symbol, instrument)
     positions._on_open_callback = _on_pos_open
 
     # Agents

@@ -22,6 +22,7 @@ class PriceFeed:
         self._lock = threading.Lock()
         self._thread = None
         self._subscribed = []  # track symbols for re-subscribe on reconnect
+        self._on_price = None  # callback: on_price(symbol, price)
 
     def start(self, token):
         if not websocket:
@@ -48,8 +49,15 @@ class PriceFeed:
                 if isinstance(msg_data, dict):
                     ltp = msg_data.get('ltp')
                     if ltp is not None:
+                        price = float(ltp)
                         with self._lock:
-                            self.prices[instrument] = float(ltp)
+                            self.prices[instrument] = price
+                        # Fire callback for real-time monitoring
+                        if self._on_price:
+                            try:
+                                self._on_price(instrument, price)
+                            except Exception:
+                                pass
             except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
 
