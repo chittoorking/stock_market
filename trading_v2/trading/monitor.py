@@ -20,12 +20,13 @@ log = get_logger('monitor')
 
 
 class Monitor:
-    def __init__(self, broker, positions, fund_manager, poll_interval: int = 10):
+    def __init__(self, broker, positions, fund_manager, poll_interval: int = 10, price_feed=None):
         self._broker = broker
         self._pos = positions
         self._fm = fund_manager
         self._poll = poll_interval
         self._running = False
+        self._pf = price_feed  # WebSocket price feed (optional)
 
     def start(self):
         self._running = True
@@ -92,10 +93,14 @@ class Monitor:
             except Exception as e:
                 log.warning(f'Batch LTP failed after retries: {e}')
 
-        # Individual LTP for F&O (using sec_id)
+        # Individual LTP for F&O (WebSocket first, REST fallback)
         for pos in fno_positions:
             try:
-                price = self._broker.ltp_by_sec_id(pos.fno_sec_id, pos.symbol)
+                price = 0
+                if self._pf:
+                    price = self._pf.get_fno_ltp(pos.fno_sec_id)
+                if price <= 0:
+                    price = self._broker.ltp_by_sec_id(pos.fno_sec_id, pos.symbol)
                 if price > 0:
                     prices[pos.symbol] = price
             except Exception as e:

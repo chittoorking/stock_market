@@ -84,8 +84,20 @@ def main():
     broker = Broker()
     positions = PositionManager(broker)
     fm = FundManager(pool=args.pool)
-    monitor = Monitor(broker, positions, fm, poll_interval=args.poll)
+
+    # WebSocket price feed for real-time LTP
+    from live.price_feed import PriceFeed
+    pf = PriceFeed()
+    pf.start(broker._api.get_token())
+
+    monitor = Monitor(broker, positions, fm, poll_interval=args.poll, price_feed=pf)
     monitor.start()
+
+    # Auto-subscribe F&O positions to WebSocket when opened
+    def _on_fno_open(pos):
+        if getattr(pos, 'fno_sec_id', ''):
+            pf.subscribe_fno([pos.fno_sec_id])
+    positions._on_open_callback = _on_fno_open
 
     # Agents
     loaded = []

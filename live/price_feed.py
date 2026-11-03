@@ -113,6 +113,43 @@ class PriceFeed:
             except Exception as e:
                 log.error(f'Subscribe error: {e}')
 
+    def subscribe_fno(self, sec_ids):
+        """Subscribe to F&O instruments by security_id. Format: NFO:sec_id"""
+        if not self.ws or not self._connected.is_set():
+            log.warning('WebSocket not connected, cannot subscribe FnO')
+            return
+        instruments = [f'NFO:{sid}' for sid in sec_ids]
+        self._subscribed.extend([f'FNO_{sid}' for sid in sec_ids])  # track for reconnect
+        if instruments:
+            msg = json.dumps({'action': 'subscribe', 'mode': 'ltp', 'instruments': instruments})
+            try:
+                self.ws.send(msg)
+                log.info(f'FnO subscribed: {len(instruments)} instruments')
+            except Exception as e:
+                log.error(f'FnO subscribe error: {e}')
+
+    def get_fno_ltp(self, sec_id):
+        """Get F&O LTP by security_id. WebSocket first, REST fallback."""
+        ws_key = f'NFO:{sec_id}'
+        with self._lock:
+            price = self.prices.get(ws_key)
+        if price and price > 0:
+            return price
+        # REST fallback
+        try:
+            import requests
+            h = {'Authorization': api.get_token()}
+            r = requests.get(f'https://api.indstocks.com/market/quotes/ltp?scrip-codes=NFO_{sec_id}',
+                             headers=h, timeout=10)
+            if r.status_code == 200:
+                val = r.json().get('data', {}).get(f'NFO_{sec_id}', {})
+                p = val.get('live_price', 0)
+                if p and float(p) > 0:
+                    return float(p)
+        except Exception:
+            pass
+        return 0
+
     def get_ltp(self, sym):
         """Get latest price. WebSocket first, REST fallback."""
         scrip = api.SCRIP_CODES.get(sym)
