@@ -379,6 +379,13 @@ class MulOptions(BaseAgent):
         fut_sl = float(fd.get('stopLoss', fd.get('sl', 0)) or 0)
         action = str(fd.get('action', signal.get('action', 'BUY'))).upper()
 
+        # Skip positional/carry-forward — we only trade intraday
+        dur = str(fd.get('durationType', fd.get('duration', '')) or '').lower()
+        hold = int(fd.get('holdDuration', 0) or 0)
+        if dur in ('positional', 'mid term', 'long term') or hold > 0:
+            self._log.info(f'SKIP {sym}: carry-forward (dur={dur} hold={hold})')
+            return
+
         # Compute SL distance for all futures
         sl_pct = abs(entry_price - fut_sl) / entry_price * 100 if entry_price > 0 and fut_sl > 0 else 0
 
