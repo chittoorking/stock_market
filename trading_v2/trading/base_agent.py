@@ -55,10 +55,23 @@ class BaseAgent:
             else:
                 margin = entry * qty * 0.20
 
-            # Check if we can afford it
+            # Scale down by whole lots if too expensive
             avail = self._fm.available
+            lot_unit = req.fno_lot_size if req.fno_lot_size > 0 else base_lot
+            if lot_unit <= 0:
+                lot_unit = qty
+            while margin > avail and qty > lot_unit:
+                qty -= lot_unit
+                if is_futures and req.fno_sec_id:
+                    margin = self._broker.get_fno_margin(req.fno_sec_id, qty,
+                                "BUY" if req.side == Side.BUY else "SELL", entry)
+                    if margin <= 0:
+                        margin = entry * qty * 0.20
+                else:
+                    margin = entry * qty
+                self._log.info(f"{req.symbol}: scale to {qty} ({qty//lot_unit} lots), margin Rs {margin:,.0f} (avail Rs {avail:,.0f})")
             if margin > avail:
-                self._log.info(f"{req.symbol}: margin Rs {margin:,.0f} > avail Rs {avail:,.0f} - SKIP")
+                self._log.info(f"{req.symbol}: 1 lot margin Rs {margin:,.0f} > avail Rs {avail:,.0f} - SKIP")
                 return None
             # Ensure qty is multiple of lot size (MCX requires exact multiples)
             if req.fno_lot_size > 0 and qty % req.fno_lot_size != 0:
