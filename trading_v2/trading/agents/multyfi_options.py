@@ -154,9 +154,9 @@ class MulOptions(BaseAgent):
 
         base = opt.get('baseSymbol', '')
         opt_type = opt.get('optionType', '')
-        strike = opt.get('strike', 0)
-        entry_price = opt.get('entryPrice', 0)
-        entry_date = opt.get('entryDate', '')
+        strike = opt.get('strike', 0) or 0
+        entry_price = opt.get('entryPrice', 0) or 0
+        entry_date = opt.get('entryDate', '') or ''
 
         if not base:
             return
