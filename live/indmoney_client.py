@@ -287,10 +287,12 @@ def place_trigger_order(sym: str, qty: int, side: str, trigger_price: float,
     if not scrip:
         log.error('place_trigger_order: unknown sym %s', sym)
         return ''
-    security_id = scrip.split('_')[1]
+    parts = scrip.split('_')
+    exchange = parts[0]
+    security_id = parts[1]
     payload = {
         'txn_type': side,
-        'exchange': 'NSE',
+        'exchange': exchange,
         'segment': 'EQUITY',
         'product': product,
         'order_type': 'TRIGGER',
@@ -360,14 +362,15 @@ def place_order(sym, qty, side, price, order_type='MARKET', product='INTRADAY', 
     product: 'INTRADAY', 'CNC', 'MARGIN'
     Note: INDstocks converts MARKET to LIMIT at live price.
     """
-    exchange = "NSE"
     scrip = SCRIP_CODES.get(sym)
     if not scrip:
         log.error(f'Unknown instrument: {sym}')
         return None
 
-    # Extract security_id (number after NSE_)
-    security_id = scrip.split('_')[1]
+    # Extract exchange and security_id from scrip code (NSE_2885 or BSE_544469)
+    parts = scrip.split('_')
+    exchange = parts[0]  # NSE or BSE
+    security_id = parts[1]
 
     order = {
         'txn_type': side,
