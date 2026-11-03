@@ -186,31 +186,31 @@ class AnomalyAgent(BaseAgent):
             s['anomaly_score'] = score
 
         # 9:20 scan only
-            # 9:20: gain>4% + residual<=13 + anomaly_score>=5
-            candidates = [s for s in stocks
-                          if s['anomaly_score'] >= MIN_ANOMALY_SCORE
-                          and s["residual"] >= 5
-                          and s['residual'] <= 13
-                          and not self._positions.find_by_symbol(s['ticker'])
-                          and s['ticker'] not in self._sl_hit
-                          and s['ltp'] >= MIN_PRICE]
-            # Filter: gain must be > 4% from prev close
-            candidates = [s for s in candidates
-                          if s.get('gain_from_prev', 0) > 4]
-            # Filter: small caps only + not momentum continuation
-            candidates = [s for s in candidates
-                          if s.get("mcap", 0) >= 150 and s.get("mcap", 9999) < 1000
-                          and s.get('mo', 0) < 35]
-            # Circuit filter: skip if upper circuit < entry + 2.5% (SL can't fill before circuit)
-            candidates = [s for s in candidates
-                          if s.get('upper_circuit', 9999) > s['ltp'] * 1.025]
-            # Block if BOTH high delivery AND high OCF (institutional buying + strong cash flow = real gap)
-            candidates = [s for s in candidates
-                          if not (s.get("dlv", 0) > 80 and s.get("ocf", 0) > 50)]
-            # Skip multi-day momentum: 10%+ gain in prior 4 days = circuit continuation
-            candidates = [s for s in candidates
-                          if (s.get('wk', 0) - s.get('gain_from_prev', 0)) < 10]
-            candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
+        # 9:20: gain>4% + residual<=13 + anomaly_score>=5
+        candidates = [s for s in stocks
+                      if s['anomaly_score'] >= MIN_ANOMALY_SCORE
+                      and s["residual"] >= 5
+                      and s['residual'] <= 13
+                      and not self._positions.find_by_symbol(s['ticker'])
+                      and s['ticker'] not in self._sl_hit
+                      and s['ltp'] >= MIN_PRICE]
+        # Filter: gain must be > 4% from prev close
+        candidates = [s for s in candidates
+                      if s.get('gain_from_prev', 0) > 4]
+        # Filter: small caps only + not momentum continuation
+        candidates = [s for s in candidates
+                      if s.get("mcap", 0) >= 150 and s.get("mcap", 9999) < 1000
+                      and s.get('mo', 0) < 35]
+        # Circuit filter: skip if upper circuit < entry + 2.5% (SL can't fill before circuit)
+        candidates = [s for s in candidates
+                      if s.get('upper_circuit', 9999) > s['ltp'] * 1.025]
+        # Block if BOTH high delivery AND high OCF (institutional buying + strong cash flow = real gap)
+        candidates = [s for s in candidates
+                      if not (s.get("dlv", 0) > 80 and s.get("ocf", 0) > 50)]
+        # Skip multi-day momentum: 10%+ gain in prior 4 days = circuit continuation
+        candidates = [s for s in candidates
+                      if (s.get('wk', 0) - s.get('gain_from_prev', 0)) < 10]
+        candidates.sort(key=lambda x: (-x['anomaly_score'], -x['residual']))
 
         # How many slots available?
         current_positions = len([p for p in self._positions.active()

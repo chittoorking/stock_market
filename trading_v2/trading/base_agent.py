@@ -41,20 +41,21 @@ class BaseAgent:
             qty = lot
 
             is_futures = "FUT" in req.symbol.upper()
-            if req.fno_margin > 0:
-                # Use Multyfi's actual margin requirement
-                margin = req.fno_margin * (qty / base_lot) if base_lot > 0 else req.fno_margin
-            elif is_futures:
-                margin = entry * qty * 0.05  # MIS margin ~5% of contract value
+            if is_futures:
+                # Use actual broker funds — never assume margin percentage
+                broker_funds = self._broker.funds()
+                margin = entry * qty  # worst case: full contract value
+                # Scale down to fit actual funds (leave 10% buffer)
+                max_margin = broker_funds * 0.5  # never use more than 50% of funds on one FnO trade
+                while margin > max_margin and qty > base_lot:
+                    qty -= base_lot
+                    margin = entry * qty
+                    self._log.info(f'{req.symbol}: scaling down to {qty} (funds=Rs {broker_funds:,.0f})')
+                if qty < base_lot:
+                    self._log.info(f'{req.symbol}: cannot afford even 1 lot (need Rs {entry * base_lot:,.0f}, have Rs {broker_funds:,.0f})')
+                    return None
             else:
                 margin = entry * qty  # options premium is the cost
-
-            # Scale down if can't afford — try 2 lots, then 1 lot
-            avail = self._fm.available
-            while margin > avail and qty > base_lot:
-                qty -= base_lot
-                margin = entry * qty * 0.05 if is_futures else entry * qty
-                self._log.info(f'{req.symbol}: scaling down to {qty} (avail=Rs {avail:,.0f})')
             # Ensure qty is multiple of lot size (MCX requires exact multiples)
             if req.fno_lot_size > 0 and qty % req.fno_lot_size != 0:
                 qty = (qty // req.fno_lot_size) * req.fno_lot_size

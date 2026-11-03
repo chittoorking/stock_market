@@ -97,7 +97,7 @@ class Broker:
     def buy_fno(self, sym: str, qty: int, sec_id: str) -> str:
         audit('broker', 'FNO_BUY', sym, qty=qty, sec_id=sec_id)
         oid = _retry(
-            lambda: self._api.place_fno_order(sym, qty, 'BUY', sec_id, order_type='MARKET'),
+            lambda: self._api.place_fno_order(sym, qty, 'BUY', sec_id, order_type='MARKET', product='INTRADAY'),
             label=f'FNO_BUY {sym}')
         if not oid:
             raise BrokerError(f'FnO BUY {sym}: returned None')
@@ -107,7 +107,7 @@ class Broker:
     def sell_fno(self, sym: str, qty: int, sec_id: str) -> str:
         audit('broker', 'FNO_SELL', sym, qty=qty, sec_id=sec_id)
         oid = _retry(
-            lambda: self._api.place_fno_order(sym, qty, 'SELL', sec_id, order_type='MARKET'),
+            lambda: self._api.place_fno_order(sym, qty, 'SELL', sec_id, order_type='MARKET', product='INTRADAY'),
             label=f'FNO_SELL {sym}')
         if not oid:
             raise BrokerError(f'FnO SELL {sym}: returned None')
@@ -373,6 +373,37 @@ class Broker:
             log.warning(f'MCX chain error {sym}: {e}')
             return []
 
+
+
+
+    def get_fno_margin(self, sec_id: str, qty: int, side: str, price: float) -> float:
+        """Get actual SPAN+Exposure margin from INDmoney API. Returns 0 if unavailable."""
+        import requests
+        try:
+            r = requests.get(f"https://api.indstocks.com/margin",
+                             headers={"Authorization": self._api.get_token()},
+                             json={
+                                 "segment": "DERIVATIVE",
+                                 "exchange": "NSE",
+                                 "securityID": str(sec_id),
+                                 "txnType": side,
+                                 "quantity": str(qty),
+                                 "price": str(round(price, 2)),
+                                 "product": "INTRADAY",
+                             }, timeout=10)
+            if r.status_code == 200:
+                margin = r.json().get("data", {}).get("total_margin", 0)
+                if margin > 0:
+                    return float(margin)
+        except Exception as e:
+            log.warning(f"Margin check failed: {e}")
+        return 0
+
+    def get_candles(self, sym: str, interval: str, start_ts: int, end_ts: int) -> list:
+        """Get historical candles. interval: 1minute, 5minute, etc. Timestamps in ms."""
+        return _retry(
+            lambda: self._api.get_historical_candles(sym, interval, start_ts, end_ts),
+            label=f'CANDLES {sym}')
 
     # ── GTT (exchange-level stop-loss) ──
 
