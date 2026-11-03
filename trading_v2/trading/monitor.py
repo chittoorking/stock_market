@@ -44,7 +44,13 @@ class Monitor:
             except Exception as e:
                 log.error(f'Tick error: {e}')
                 traceback.print_exc()
-            time.sleep(self._poll)
+            # If WebSocket prices available, check every 1s (cached, no API call)
+            # If REST fallback only, check every 10s
+            ws_prices = getattr(self, '_ws_prices', {})
+            if ws_prices:
+                time.sleep(1)
+            else:
+                time.sleep(self._poll)
         log.error('Monitor loop exited! _running is False')
 
     def _tick(self):
@@ -83,18 +89,25 @@ class Monitor:
             else:
                 equity_syms.append(p.symbol)
 
-        # Equity LTP: WebSocket first, REST batch fallback
+        # Equity LTP: WebSocket prices first, REST fallback
         prices = {}
         ws_miss = []
-        if equity_syms and self._pf:
-            for sym in set(equity_syms):
-                wp = self._pf.get_ltp(sym)
-                if wp and wp > 0:
-                    prices[sym] = wp
+        ws_prices = getattr(self, '_ws_prices', {})
+        sym_to_inst = getattr(self, '_sym_to_instrument', {})
+
+        for sym in set(equity_syms):
+            inst = sym_to_inst.get(sym, '')
+            wp = ws_prices.get(inst, 0)
+            if wp > 0:
+                prices[sym] = wp
+            elif self._pf:
+                wp2 = self._pf.get_ltp(sym)
+                if wp2 and wp2 > 0:
+                    prices[sym] = wp2
                 else:
                     ws_miss.append(sym)
-        else:
-            ws_miss = list(set(equity_syms))
+            else:
+                ws_miss.append(sym)
 
         # REST fallback for any WebSocket misses
         if ws_miss:
@@ -106,11 +119,12 @@ class Monitor:
             except Exception as e:
                 log.warning(f'Batch LTP failed after retries: {e}')
 
-        # Individual LTP for F&O (WebSocket first, REST fallback)
+        # F&O LTP: WebSocket first, REST fallback
         for pos in fno_positions:
             try:
-                price = 0
-                if self._pf:
+                fno_inst = f'NFO:{pos.fno_sec_id}'
+                price = ws_prices.get(fno_inst, 0)
+                if price <= 0 and self._pf:
                     price = self._pf.get_fno_ltp(pos.fno_sec_id)
                 if price <= 0:
                     price = self._broker.ltp_by_sec_id(pos.fno_sec_id, pos.symbol)
@@ -167,35 +181,41 @@ class Monitor:
                     return
 
     def _exit(self, pos_id: str, exit_price: float = 0, reason: str = 'MANUAL'):
-        pos = self._pos.close(pos_id, exit_price=exit_price, reason=reason)
-        if pos and pos.trade_id:
-            self._fm.release(pos.trade_id, pnl=pos.pnl)
+        # Run close in thread to avoid blocking WebSocket
+        import threading as _th
+        def _do_exit():
+            pos = self._pos.close(pos_id, exit_price=exit_price, reason=reason)
+            if pos and pos.trade_id:
+                self._fm.release(pos.trade_id, pnl=pos.pnl)
+        _th.Thread(target=_do_exit, daemon=True).start()
 
     def on_price(self, instrument: str, price: float):
-        """Called by WebSocket on every tick. Check SL/trail instantly."""
+        """Called by WebSocket on every tick. Check SL/trail instantly.
+        Runs _check directly. If exit triggers, spawns thread for broker call."""
         if price <= 0 or not self._running:
             return
-        # Map instrument (NSE:2885 or NFO:61515) to position symbol
+        # Also cache for fallback
+        if not hasattr(self, '_ws_prices'):
+            self._ws_prices = {}
+        self._ws_prices[instrument] = price
+
         active = self._pos.active()
         if not active:
             return
         for pos in active:
-            # Match by scrip code or fno sec_id
             fno_id = getattr(pos, 'fno_sec_id', '')
+            matched = False
             if fno_id and f'NFO:{fno_id}' == instrument:
+                matched = True
+            elif not fno_id and hasattr(self, '_sym_to_instrument'):
+                if self._sym_to_instrument.get(pos.symbol) == instrument:
+                    matched = True
+            if matched:
                 try:
                     self._check(pos, price)
                 except Exception:
                     pass
                 return
-            # Equity: instrument = NSE:sec_id, need to match symbol
-            if not fno_id and hasattr(self, '_sym_to_instrument'):
-                if self._sym_to_instrument.get(pos.symbol) == instrument:
-                    try:
-                        self._check(pos, price)
-                    except Exception:
-                        pass
-                    return
 
     def register_symbol(self, symbol: str, instrument: str):
         """Map symbol to WebSocket instrument key for real-time matching."""
