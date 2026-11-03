@@ -6,6 +6,8 @@ This file only handles: polling loop, signal routing, dedup, queue.
 """
 import re
 import time
+import pandas as pd
+import yfinance as yf
 from datetime import datetime
 
 from trading.base_agent import BaseAgent
@@ -143,7 +145,7 @@ class MulOptions(BaseAgent):
             if _now.hour < 9 or _now.hour >= _mcx_close:
                 return  # MCX: 9 AM - 11 PM only
         else:
-            if _now.hour < 9 or (_now.hour == 9 and _now.minute < 15) or _now.hour >= 16:
+            if _now.hour < 9 or (_now.hour == 9 and _now.minute < 15) or (_now.hour == 15 and _now.minute >= 30) or _now.hour >= 16:
                 return  # NSE: 9:15 AM - 3:30 PM only
 
         action = str(opt.get('action', opt.get('orderType', ''))).upper()
@@ -352,7 +354,7 @@ class MulOptions(BaseAgent):
             return
 
         audit('multyfi', 'EQUITY_ENTRY', sym, entry=entry_price, sl=sl,
-              target=target, action=action, dlv_chg=round(dlv_chg, 1))
+              target=target, trade_action=action, dlv_chg=round(dlv_chg, 1))
         self._log.info(f'EQUITY {action} {sym} @ {entry_price} SL={sl} TGT={target} dlv_chg={dlv_chg:+.1f}')
 
         req = TradeRequest(
@@ -380,11 +382,13 @@ class MulOptions(BaseAgent):
         # Compute SL distance for all futures
         sl_pct = abs(entry_price - fut_sl) / entry_price * 100 if entry_price > 0 and fut_sl > 0 else 0
 
+        score = 6  # default for commodity futures (passed COMEX gate)
+
         if is_commodity:
             # ── MCX COMMODITIES ──
             # Log every commodity signal
             audit('multyfi', 'COMMODITY_SIGNAL', sym,
-                  action=action, entry=entry_price, sl=fut_sl,
+                  trade_action=action, entry=entry_price, sl=fut_sl,
                   sl_pct=round(sl_pct, 2),
                   hour=datetime.now().hour, dow=datetime.now().weekday())
 
@@ -395,7 +399,6 @@ class MulOptions(BaseAgent):
                     self._log.info(f'SKIP GOLD {sym}: SL {sl_pct:.2f}% < 0.4%')
                     return
                 try:
-                    import yfinance as yf
                     gc = yf.download('GC=F', period='5d', interval='1h', progress=False, auto_adjust=True)
                     if hasattr(gc, 'columns') and isinstance(gc.columns, pd.MultiIndex):
                         gc.columns = gc.columns.get_level_values(0)
@@ -425,7 +428,6 @@ class MulOptions(BaseAgent):
                     self._log.info(f'SKIP SILVER {sym}: SL {sl_pct:.2f}% < 0.3%')
                     return
                 try:
-                    import yfinance as yf
                     si = yf.download('SI=F', period='5d', interval='1h', progress=False, auto_adjust=True)
                     if hasattr(si, 'columns') and isinstance(si.columns, pd.MultiIndex):
                         si.columns = si.columns.get_level_values(0)
@@ -526,7 +528,7 @@ class MulOptions(BaseAgent):
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
             entry=entry_price, sl=sl,
             trail_activate_pct=_trail_act, trail_pct=_trail_pct,
-            conviction=min(score // 3, 10),
+            conviction=max(1, min(score // 3, 10)),
             reason=f'multyfi futures {action} score={score} x{lot_mult}',
             is_fno=True, fno_sec_id=sec_id, fno_lot_size=scaled_lot, fno_margin=margin_req,
         )
@@ -579,7 +581,7 @@ class MulOptions(BaseAgent):
 
         # LOG EVERY SIGNAL with market structure (even if skipped)
         audit('multyfi', 'OPTION_SIGNAL_FULL', sym,
-              opt_type=opt_type, action=action, score=score,
+              opt_type=opt_type, trade_action=action, score=score,
               entry=entry_price, threshold=threshold,
               **mkt_log, **{k: round(v, 2) if isinstance(v, float) else v
                           for k, v in sig.items() if k in ('target_pct', 'sl', 'strike', 'expiry')})
@@ -599,14 +601,14 @@ class MulOptions(BaseAgent):
                 if mkt['stocks_down_pct'] < 75 or mkt['below_vwap_pct'] < 70:
                     self._log.info(f'SKIP {sym} {opt_type} {action}: market not bearish enough '
                                    f'(down={mkt["stocks_down_pct"]:.0f}% vwap={mkt["below_vwap_pct"]:.0f}%)')
-                    audit('multyfi', 'OPTION_SKIP_MKT', sym, opt_type=opt_type, action=action,
+                    audit('multyfi', 'OPTION_SKIP_MKT', sym, opt_type=opt_type, trade_action=action,
                           reason='not_bearish', **mkt_log)
                     return
             elif is_bullish:
                 if mkt['stocks_down_pct'] > 40 or mkt['below_vwap_pct'] > 50 or mkt['dlv_rising_pct'] < 75:
                     self._log.info(f'SKIP {sym} {opt_type} {action}: market not bullish enough '
                                    f'(down={mkt["stocks_down_pct"]:.0f}% vwap={mkt["below_vwap_pct"]:.0f}% dlv={mkt["dlv_rising_pct"]:.0f}%)')
-                    audit('multyfi', 'OPTION_SKIP_MKT', sym, opt_type=opt_type, action=action,
+                    audit('multyfi', 'OPTION_SKIP_MKT', sym, opt_type=opt_type, trade_action=action,
                           reason='not_bullish', **mkt_log)
                     return
         else:
@@ -645,7 +647,7 @@ class MulOptions(BaseAgent):
             symbol=sym, side=Side.BUY if action == 'BUY' else Side.SELL,
             entry=opt_premium, sl=sl_price,
             trail_activate_pct=10, trail_pct=10,  # NSE options: activate at 10% profit, trail 10% from peak
-            conviction=min(score // 3, 10),
+            conviction=max(1, min(score // 3, 10)),
             reason=f'multyfi {opt_type} {action} score={score} x{lot_mult}',
             is_fno=True, fno_sec_id=sec_id, fno_lot_size=scaled_lot,
         )

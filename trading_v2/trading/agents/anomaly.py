@@ -83,7 +83,7 @@ class AnomalyAgent(BaseAgent):
     def _run_day(self):
         now = datetime.now()
         if now.hour >= 10 or now.weekday() >= 5:
-            self._log.info('Past 2 PM or weekend, skipping')
+            self._log.info('Past 10 AM or weekend, skipping')
             return
 
         self._entered.clear()
@@ -558,11 +558,12 @@ class AnomalyAgent(BaseAgent):
                         except Exception:
                             pass
                         # Fall through to position registration below (don't continue)
-                    self._log.info(f'{sym}: second chance no fill — released')
-                    self._fm.release(p['trade_id'], pnl=0)
-                    self._entered.add(sym)  # block re-entry even on second chance no-fill
-                    audit('anomaly', 'SECOND_CHANCE_NO_FILL', sym)
-                    continue
+                    else:
+                        self._log.info(f'{sym}: second chance no fill — released')
+                        self._fm.release(p['trade_id'], pnl=0)
+                        self._entered.add(sym)
+                        audit('anomaly', 'SECOND_CHANCE_NO_FILL', sym)
+                        continue
 
                 # Get actual fill
                 actual_qty = p['qty']

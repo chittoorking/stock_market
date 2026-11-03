@@ -44,7 +44,9 @@ class TradingServer:
             def do_GET(self):
                 path = urlparse(self.path).path
                 if path == '/health':
+                    from trading.main import _agent_status
                     self._j({'ok': True, 'agents': list(ref._agents.keys()),
+                             'agent_health': _agent_status,
                              'time': datetime.now().isoformat()})
                 elif path == '/status':
                     status = ref._fm.status() if ref._fm else {}
@@ -86,17 +88,14 @@ class TradingServer:
                 except json.JSONDecodeError:
                     sig = {'text': body}
 
-                # All notifications route to equity_notif
-                agent = ref._agents.get('equity_notif')
+                # Route to first available agent
+                agent = next(iter(ref._agents.values()), None)
                 if not agent:
-                    self._j({'error': 'equity_notif agent not loaded'})
+                    self._j({'error': 'no agent available'})
                     return
 
-                # Log full payload for debugging
-                import json as _j
-                log.info(f'RAW PAYLOAD: {_j.dumps(sig)[:500]}')
                 raw_text = str(sig.get('text', sig.get('body', sig.get('stock', ''))))
-                audit('server', 'NOTIFY', text=raw_text[:300])
+                audit('server', 'NOTIFY', text=raw_text[:80])
                 result = agent.on_signal(sig)
                 self._j(result)
 

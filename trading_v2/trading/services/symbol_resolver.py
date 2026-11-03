@@ -89,6 +89,8 @@ def _month_abbr_to_full(abbr: str) -> str:
 
 
 def resolve_fno_sec_id(trading_symbol: str) -> str:
+    if not trading_symbol:
+        return ""
     """Resolve any FnO trading symbol to numeric sec_id from instrument master.
 
     Handles:

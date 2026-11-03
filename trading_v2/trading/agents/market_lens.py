@@ -170,7 +170,7 @@ class MarketLensAgent(BaseAgent):
         entry_done = False
         while True:
             now = datetime.now()
-            if now.hour >= 15 and now.minute >= 15:
+            if now.hour > 15 or (now.hour == 15 and now.minute >= 15):
                 break
 
             stocks = self._fetch_market_lens()

@@ -1,7 +1,7 @@
 """Main — single entry point.
 
     python3 -m trading.main
-    python3 -m trading.main --agents equity_notif news_orb
+    python3 -m trading.main --agents news_orb multyfi_options
     python3 -m trading.main --port 8905 --pool 100000
 """
 import argparse
@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 # Ensure both trading_v2 AND news-trading root are importable
@@ -31,17 +32,33 @@ from trading.logger import get_logger
 log = get_logger('main')
 
 AGENTS = {
-    'anomaly':         'trading.agents.anomaly:AnomalyAgent',
-    # PAPER MODE — logging only, no trades
     'news_orb':        'trading.agents.news_orb:NewsOrbAgent',
     'multyfi_options': 'trading.agents.multyfi_options:MulOptions',
     'ipo':             'trading.agents.ipo:IpoAgent',
     'pullback':        'trading.agents.pullback:PullbackAgent',
     'market_lens':     'trading.agents.market_lens:MarketLensAgent',
+    'anomaly':         'trading.agents.anomaly:AnomalyAgent',
 }
 
 # Agents with custom run() — started as background threads
-AUTONOMOUS = {'anomaly', 'news_orb', 'multyfi_options', 'ipo', 'pullback', 'market_lens'}
+AUTONOMOUS = {'news_orb', 'multyfi_options', 'ipo',
+              'pullback', 'market_lens', 'anomaly'}
+
+TG_TOKEN = '8831033342:AAGstfFaVjPPvSykkCwfQIS9O8iYujqHivs'
+TG_CHAT = '866752968'
+
+
+def _tg(msg):
+    try:
+        import requests
+        requests.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
+                      json={'chat_id': TG_CHAT, 'text': msg}, timeout=5)
+    except Exception:
+        pass
+
+
+# Track agent health for /health endpoint
+_agent_status = {}  # name -> {'alive': bool, 'crashes': int, 'last_crash': str}
 
 
 def _load(path: str):
@@ -69,7 +86,6 @@ def main():
     fm = FundManager(pool=args.pool)
     monitor = Monitor(broker, positions, fm, poll_interval=args.poll)
     monitor.start()
-
 
     # Agents
     loaded = []
@@ -102,32 +118,48 @@ def main():
     server.start()
 
 
-def _run_with_recovery(agent, max_retries=3):
-    """Run agent with crash recovery. Retries up to max_retries."""
-    for attempt in range(max_retries):
+def _run_with_recovery(agent):
+    """Run agent with INFINITE crash recovery. Never gives up during market hours.
+    Backoff: 10s → 30s → 60s → 120s, capped at 120s.
+    Resets backoff after 5 minutes of stable running."""
+    crashes = 0
+    _agent_status[agent.name] = {'alive': True, 'crashes': 0, 'last_crash': ''}
+
+    while True:
+        started = time.time()
         try:
+            _agent_status[agent.name]['alive'] = True
             agent.run()
-            return  # normal exit (e.g., CAS/IPO run once and finish)
+            # Normal exit (e.g., IPO runs once and finishes)
+            log.info(f'{agent.name} finished normally')
+            return
         except Exception as e:
-            log.error(f'{agent.name} crashed (attempt {attempt + 1}/{max_retries}): {e}')
+            crashes += 1
+            now = datetime.now()
+            _agent_status[agent.name] = {
+                'alive': False, 'crashes': crashes,
+                'last_crash': now.strftime('%H:%M:%S')
+            }
+            log.error(f'{agent.name} CRASHED #{crashes}: {e}')
             traceback.print_exc()
-            if attempt < max_retries - 1:
-                time.sleep(30)  # wait before retry
-    log.error(f'{agent.name} failed after {max_retries} attempts — giving up')
 
+            # Alert on Telegram
+            _tg(f'⚠️ {agent.name} crashed #{crashes} at {now.strftime("%H:%M")}: {str(e)[:100]}')
 
+            # Don't retry after market hours (3:20 PM)
+            if now.hour > 15 or (now.hour == 15 and now.minute >= 20):
+                log.info(f'{agent.name} crashed after market hours — not retrying')
+                return
 
-# ── PID Lock — prevent duplicates ───────────────────────────────────
-import fcntl, os
-_LOCK_FILE = os.path.expanduser('~/trading_main.lock')
-_lock_fp = open(_LOCK_FILE, 'w')
-try:
-    fcntl.flock(_lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    _lock_fp.write(str(os.getpid()))
-    _lock_fp.flush()
-except BlockingIOError:
-    print('Trading main already running. Exiting.')
-    exit(0)
+            # Backoff: 10s, 30s, 60s, 120s max
+            wait = min(120, 10 * (3 ** min(crashes - 1, 3)))
+            log.info(f'{agent.name} restarting in {wait}s...')
+            time.sleep(wait)
+
+            # Reset crash counter if agent ran stable for 5+ minutes
+            if time.time() - started > 300:
+                crashes = 0
+
 
 if __name__ == '__main__':
     main()

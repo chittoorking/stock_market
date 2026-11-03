@@ -71,6 +71,8 @@ class FundManager:
 
     def request(self, strategy, symbol, amount, conviction=5):
         """Strategy says how much it needs. FM just checks if possible."""
+        if amount <= 0:
+            return False, 0, ""
         with self._lock:
             # Separate kill switches: check if THIS trade's segment is blocked
             _sym_upper = symbol.upper()
@@ -172,4 +174,4 @@ class FundManager:
                 self.pool = bal
         except Exception:
             pass
-        audit('fm', 'DAILY_RESET', pool=self.pool)
+        audit('fm', 'DAILY_RESET', '', pool=self.pool)

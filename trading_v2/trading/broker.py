@@ -2,8 +2,10 @@
 
 Every method raises BrokerError on failure. Never returns None silently.
 Every order is audit-logged before and after.
+Network-resilient: retries API calls 3x with backoff before giving up.
 """
 import sys
+import time
 from pathlib import Path
 
 # Ensure news-trading root is importable (for `from live import indmoney_client`)
@@ -20,6 +22,27 @@ class BrokerError(Exception):
     pass
 
 
+def _retry(fn, retries=3, delay=2, label=''):
+    """Retry a callable up to `retries` times with exponential backoff.
+    Only retries on network/timeout errors, NOT on business logic errors."""
+    import requests
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ReadTimeout,
+                ConnectionError, TimeoutError, OSError) as e:
+            last_err = e
+            wait = delay * (2 ** attempt)  # 2s, 4s, 8s
+            log.warning(f'RETRY {label} attempt {attempt+1}/{retries}: {e} — wait {wait}s')
+            time.sleep(wait)
+        except Exception:
+            raise  # non-network errors fail immediately
+    raise last_err  # all retries exhausted
+
+
 class Broker:
     """Wraps indmoney_client. Fails loud on any issue."""
 
@@ -34,20 +57,20 @@ class Broker:
 
     def _validate(self):
         for attr in ['place_order', 'get_ltp', 'get_order_book', 'SCRIP_CODES',
-                      'cancel_order', 'get_funds', 'place_fno_order', 'get_option_chain',
-                      'place_trigger_order', 'modify_trigger_order', 'cancel_trigger_order']:
+                      'cancel_order', 'get_funds', 'place_fno_order', 'get_option_chain']:
             if not hasattr(self._api, attr):
                 raise BrokerError(f'Missing: {attr}')
 
     # ── Orders ──
 
     def buy(self, sym: str, qty: int, price: float = 0,
-            order_type: str = 'MARKET', product: str = 'INTRADAY',
-            validity: str = 'DAY') -> str:
+            order_type: str = 'MARKET', product: str = 'INTRADAY') -> str:
         self._check_sym(sym)
-        audit('broker', 'BUY_SUBMIT', sym, qty=qty, price=price, order_type=order_type, validity=validity)
-        oid = self._api.place_order(sym, qty, 'BUY', price=price,
-                                     order_type=order_type, product=product, validity=validity)
+        audit('broker', 'BUY_SUBMIT', sym, qty=qty, price=price, order_type=order_type)
+        oid = _retry(
+            lambda: self._api.place_order(sym, qty, 'BUY', price=price,
+                                           order_type=order_type, product=product),
+            label=f'BUY {sym}')
         if not oid:
             audit('broker', 'BUY_FAILED', sym, qty=qty)
             raise BrokerError(f'BUY {sym} qty={qty}: returned None')
@@ -55,12 +78,13 @@ class Broker:
         return oid
 
     def sell(self, sym: str, qty: int, price: float = 0,
-             order_type: str = 'MARKET', product: str = 'INTRADAY',
-             validity: str = 'DAY') -> str:
+             order_type: str = 'MARKET', product: str = 'INTRADAY') -> str:
         self._check_sym(sym)
         audit('broker', 'SELL_SUBMIT', sym, qty=qty)
-        oid = self._api.place_order(sym, qty, 'SELL', price=price,
-                                     order_type=order_type, product=product, validity=validity)
+        oid = _retry(
+            lambda: self._api.place_order(sym, qty, 'SELL', price=price,
+                                           order_type=order_type, product=product),
+            label=f'SELL {sym}')
         if not oid:
             audit('broker', 'SELL_FAILED', sym, qty=qty)
             raise BrokerError(f'SELL {sym} qty={qty}: returned None')
@@ -70,128 +94,25 @@ class Broker:
     def buy_limit(self, sym: str, qty: int, price: float) -> str:
         return self.buy(sym, qty, price=price, order_type='LIMIT')
 
-    # MCX commodity prefixes for segment detection
-    _MCX_PREFIXES = ('GOLD', 'SILVER', 'CRUDE', 'NATURAL', 'COPPER', 'ZINC', 'LEAD', 'ALUMIN', 'NICKEL')
-
-    def _is_mcx(self, sym: str) -> bool:
-        return sym.upper().startswith(self._MCX_PREFIXES)
-
     def buy_fno(self, sym: str, qty: int, sec_id: str) -> str:
         audit('broker', 'FNO_BUY', sym, qty=qty, sec_id=sec_id)
-        oid = self._api.place_fno_order(sym, qty, 'BUY', sec_id, order_type='MARKET')
+        oid = _retry(
+            lambda: self._api.place_fno_order(sym, qty, 'BUY', sec_id, order_type='MARKET'),
+            label=f'FNO_BUY {sym}')
         if not oid:
-            # Order may have filled despite None return -- check FNO positions
-            import time; time.sleep(2)
-            try:
-                import requests as _req
-                from live.indmoney_client import headers as _hdrs
-                _seg = 'commodity' if self._is_mcx(sym) else 'derivative'
-                _prod = 'intraday' if self._is_mcx(sym) else 'intraday'
-                _r = _req.get(f'https://api.indstocks.com/portfolio/positions?segment={_seg}&product={_prod}',
-                              headers=_hdrs(), timeout=10)
-                if _r.status_code == 200:
-                    _data = _r.json().get('data', {})
-                    _pos = _data if isinstance(_data, list) else _data.get('net_positions', [])
-                    for _p in _pos:
-                        if str(_p.get('security_id','')) == str(sec_id) and abs(_p.get('net_qty',0)) > 0:
-                            oid = str(_p.get('order_id', '')) or 'FNO-VERIFIED'
-                            log.warning(f'FnO BUY {sym}: API returned None but position found at broker')
-                            audit('broker', 'FNO_BUY_VERIFIED', sym, order_id=oid, sec_id=sec_id)
-                            return oid
-            except Exception as _e:
-                log.warning(f'FnO verify failed: {_e}')
-            raise BrokerError(f'FnO BUY {sym}: returned None and no position at broker')
+            raise BrokerError(f'FnO BUY {sym}: returned None')
         audit('broker', 'FNO_BUY_OK', sym, order_id=oid)
         return oid
 
     def sell_fno(self, sym: str, qty: int, sec_id: str) -> str:
         audit('broker', 'FNO_SELL', sym, qty=qty, sec_id=sec_id)
-        oid = self._api.place_fno_order(sym, qty, 'SELL', sec_id, order_type='MARKET')
+        oid = _retry(
+            lambda: self._api.place_fno_order(sym, qty, 'SELL', sec_id, order_type='MARKET'),
+            label=f'FNO_SELL {sym}')
         if not oid:
-            # Order may have filled despite None return -- check FNO positions
-            import time; time.sleep(2)
-            try:
-                import requests as _req
-                from live.indmoney_client import headers as _hdrs
-                _seg = 'commodity' if self._is_mcx(sym) else 'derivative'
-                _r = _req.get(f'https://api.indstocks.com/portfolio/positions?segment={_seg}&product=intraday',
-                              headers=_hdrs(), timeout=10)
-                if _r.status_code == 200:
-                    _data = _r.json().get('data', {})
-                    _pos = _data if isinstance(_data, list) else _data.get('net_positions', [])
-                    for _p in _pos:
-                        # For SELL: position should be net_qty < 0 (short) or net_qty == 0 (closed)
-                        # If net_qty is still positive, sell didn't work
-                        if str(_p.get('security_id','')) == str(sec_id) and _p.get('net_qty', 0) <= 0:
-                            oid = str(_p.get('order_id', '')) or 'FNO-VERIFIED'
-                            log.warning(f'FnO SELL {sym}: API returned None but sell confirmed at broker')
-                            audit('broker', 'FNO_SELL_VERIFIED', sym, order_id=oid, sec_id=sec_id)
-                            return oid
-            except Exception as _e:
-                log.warning(f'FnO verify failed: {_e}')
-            raise BrokerError(f'FnO SELL {sym}: returned None and sell not confirmed at broker')
+            raise BrokerError(f'FnO SELL {sym}: returned None')
         audit('broker', 'FNO_SELL_OK', sym, order_id=oid)
         return oid
-
-    def sell_smart(self, sym: str, qty: int, limit_price: float, sl_trigger: float, sl_limit: float) -> dict:
-        """Place smart SELL order with SL. Returns {parent: oid, child: oid}."""
-        self._check_sym(sym)
-        audit('broker', 'SMART_SELL_SUBMIT', sym, qty=qty, price=limit_price, sl=sl_trigger)
-        result = self._api.place_smart_order(sym, qty, 'SELL', limit_price,
-                                              sl_trigger=sl_trigger, sl_limit=sl_limit)
-        if not result:
-            audit('broker', 'SMART_SELL_FAILED', sym, qty=qty)
-            raise BrokerError(f'Smart SELL {sym}: returned None')
-        audit('broker', 'SMART_SELL_OK', sym, qty=qty, parent=result.get('parent',''), child=result.get('child',''))
-        return result
-
-    def buy_smart(self, sym: str, qty: int, limit_price: float, sl_trigger: float, sl_limit: float) -> dict:
-        """Place smart BUY order with SL. Returns {parent: oid, child: oid}."""
-        self._check_sym(sym)
-        audit('broker', 'SMART_BUY_SUBMIT', sym, qty=qty, price=limit_price, sl=sl_trigger)
-        result = self._api.place_smart_order(sym, qty, 'BUY', limit_price,
-                                              sl_trigger=sl_trigger, sl_limit=sl_limit)
-        if not result:
-            audit('broker', 'SMART_BUY_FAILED', sym, qty=qty)
-            raise BrokerError(f'Smart BUY {sym}: returned None')
-        audit('broker', 'SMART_BUY_OK', sym, qty=qty, parent=result.get('parent',''), child=result.get('child',''))
-        return result
-
-    def place_gtt(self, sym: str, qty: int, side: str,
-                  trigger: float, limit: float) -> str:
-        """Place exchange-side GTT order. Returns order id or empty string."""
-        self._check_sym(sym)
-        audit("broker", "GTT_SUBMIT", sym, qty=qty, side=side, trigger=trigger)
-        oid = self._api.place_trigger_order(sym, qty, side, trigger, limit)
-        if not oid:
-            audit("broker", "GTT_FAILED", sym)
-            return ""
-        audit("broker", "GTT_OK", sym, order_id=oid, trigger=trigger)
-        return oid
-
-    def modify_gtt(self, order_id: str, trigger: float, limit: float) -> bool:
-        """Modify GTT trigger price (for trailing SL or extending target)."""
-        if not order_id:
-            return False
-        ok = self._api.modify_trigger_order(order_id, trigger, limit)
-        audit("broker", "GTT_MODIFY", order_id=order_id, trigger=trigger, ok=ok)
-        return ok
-
-    def cancel_gtt(self, order_id: str) -> bool:
-        """Cancel a GTT order."""
-        if not order_id:
-            return True
-        ok = self._api.cancel_trigger_order(order_id)
-        audit("broker", "GTT_CANCEL", order_id=order_id, ok=ok)
-        return ok
-
-    def cancel_smart(self, order_id: str):
-        """Cancel smart order (SL leg)."""
-        try:
-            self._api.cancel_smart_order(order_id)
-            audit('broker', 'SMART_CANCEL_OK', order_id=order_id)
-        except Exception as e:
-            audit('broker', 'SMART_CANCEL_FAIL', order_id=order_id, error=str(e))
 
     # ── Price ──
 
@@ -204,94 +125,66 @@ class Broker:
     }
 
     def ltp(self, sym: str) -> float:
-        """Raises if unavailable."""
+        """Raises if unavailable. Retries on network errors."""
         # Try index LTP first
         idx_scrip = self._INDEX_SCRIPS.get(sym) or self._INDEX_SCRIPS.get(sym.upper())
         if idx_scrip:
             import requests
-            h = {'Authorization': self._api.get_token()}
-            r = requests.get(f'https://api.indstocks.com/market/quotes/ltp?scrip-codes={idx_scrip}',
-                             headers=h, timeout=10)
-            if r.status_code == 200:
-                val = r.json().get('data', {}).get(idx_scrip, {})
-                p = val.get('live_price', 0)
-                if p > 0:
-                    return float(p)
-            raise BrokerError(f'No LTP: {sym}')
+            def _idx_ltp():
+                h = {'Authorization': self._api.get_token()}
+                r = requests.get(f'https://api.indstocks.com/market/quotes/ltp?scrip-codes={idx_scrip}',
+                                 headers=h, timeout=10)
+                if r.status_code == 200:
+                    val = r.json().get('data', {}).get(idx_scrip, {})
+                    p = val.get('live_price', 0)
+                    if p > 0:
+                        return float(p)
+                raise BrokerError(f'No LTP: {sym}')
+            return _retry(_idx_ltp, label=f'LTP {sym}')
 
-        p = self._api.get_ltp([sym]).get(sym, 0)
-        if p <= 0:
-            raise BrokerError(f'No LTP: {sym}')
-        return float(p)
-
-    def ltp_fno(self, sec_id: str) -> float:
-        """Get LTP for FnO instrument by security ID."""
-        import requests
-        h = {'Authorization': self._api.get_token()}
-        r = requests.get(f'https://api.indstocks.com/market/quotes/ltp?scrip-codes={sec_id}',
-                         headers=h, timeout=10, verify=False)
-        if r.status_code == 200:
-            val = r.json().get('data', {}).get(str(sec_id), {})
-            p = val.get('live_price', 0)
-            if p and float(p) > 0:
-                return float(p)
-        return 0
+        def _stock_ltp():
+            p = self._api.get_ltp([sym]).get(sym, 0)
+            if p <= 0:
+                raise BrokerError(f'No LTP: {sym}')
+            return float(p)
+        return _retry(_stock_ltp, label=f'LTP {sym}')
 
     def ltp_safe(self, sym: str, default: float = 0, fno_sec_id: str = None) -> float:
         try:
             if fno_sec_id:
-                p = self.ltp_fno(fno_sec_id)
-                if p > 0:
-                    return p
+                return self.ltp_by_sec_id(fno_sec_id, sym)
             return self.ltp(sym)
-        except BrokerError:
+        except (BrokerError, Exception):
             return default
 
-    # ── Order status ──
-
-
-
-    def get_candles(self, sym: str, interval: str, start_ts: int, end_ts: int) -> list:
-        """Get candles from INDmoney historical API. Returns list of {o,h,l,c,v,ts}."""
-        try:
-            scrip = self._api.SCRIP_CODES.get(sym)
-            if not scrip:
-                return []
-            r = self._api.requests.get(
-                f'{self._api.BASE}/market/historical/{interval}',
-                params={'scrip-codes': scrip, 'start_time': start_ts, 'end_time': end_ts},
-                headers=self._api.headers(), timeout=15)
+    def ltp_by_sec_id(self, sec_id: str, sym: str = '') -> float:
+        """Get LTP for F&O instrument using numeric security_id."""
+        import requests
+        def _fno_ltp():
+            h = {"Authorization": self._api.get_token()}
+            r = requests.get(f"https://api.indstocks.com/market/quotes/ltp?scrip-codes=NFO_{sec_id}",
+                             headers=h, timeout=10)
             if r.status_code == 200:
-                data = r.json().get('data', {}).get(scrip, {})
-                candles = data if isinstance(data, list) else data.get('candles', [])
-                return candles
-        except Exception as e:
-            log.warning(f'Candles {sym}: {e}')
-        return []
+                data = r.json().get("data", {})
+                # Try NFO_ prefix, then MCX_
+                for prefix in [f"NFO_{sec_id}", f"MCX_{sec_id}", sec_id]:
+                    val = data.get(prefix, {})
+                    p = val.get("live_price", 0)
+                    if p and float(p) > 0:
+                        return float(p)
+            # Retry with MCX prefix for commodities
+            r2 = requests.get(f"https://api.indstocks.com/market/quotes/ltp?scrip-codes=MCX_{sec_id}",
+                              headers=h, timeout=10)
+            if r2.status_code == 200:
+                data2 = r2.json().get("data", {})
+                for key, val in data2.items():
+                    p = val.get("live_price", 0)
+                    if p and float(p) > 0:
+                        return float(p)
+            raise BrokerError(f"No FnO LTP: sec_id={sec_id} sym={sym}")
+        return _retry(_fno_ltp, label=f"FNO_LTP {sym}")
 
-    def get_vwap(self, sym: str) -> float:
-        """Get today's VWAP for a stock. Returns 0 if unavailable."""
-        try:
-            scrip = self._api.SCRIP_CODES.get(sym)
-            if not scrip:
-                return 0
-            # Use full quote which has VWAP or calculate from today's data
-            quotes = self._api.get_full_quote([sym])
-            if quotes and sym in quotes:
-                q = quotes[sym]
-                # INDmoney full quote may have avg_price (VWAP proxy)
-                vwap = q.get('avg_price', q.get('vwap', 0))
-                if vwap and vwap > 0:
-                    return float(vwap)
-                # Fallback: use (high + low + close) / 3 as typical price
-                h = q.get('high', 0)
-                l = q.get('low', 0)
-                c = q.get('live_price', q.get('close', 0))
-                if h and l and c:
-                    return (h + l + c) / 3
-            return 0
-        except Exception:
-            return 0
+    # ── Order status ──
 
     def order_filled(self, order_id: str) -> tuple[bool, float]:
         """Check via order book. Returns (filled, traded_price)."""
@@ -479,6 +372,32 @@ class Broker:
         except Exception as e:
             log.warning(f'MCX chain error {sym}: {e}')
             return []
+
+
+    # ── GTT (exchange-level stop-loss) ──
+
+    def place_gtt(self, sym: str, qty: int, side: str,
+                  trigger_price: float, limit_price: float) -> str:
+        """Place GTT trigger order at exchange. Returns order_id or empty string."""
+        self._check_sym(sym)
+        audit('broker', 'GTT_SUBMIT', sym, side=side, qty=qty,
+              trigger=round(trigger_price, 2), limit=round(limit_price, 2))
+        oid = _retry(
+            lambda: self._api.place_trigger_order(sym, qty, side, trigger_price, limit_price),
+            label=f'GTT {side} {sym}')
+        if oid:
+            audit('broker', 'GTT_OK', sym, order_id=oid)
+        else:
+            audit('broker', 'GTT_FAILED', sym)
+        return oid or ''
+
+    def cancel_gtt(self, order_id: str):
+        """Cancel a GTT trigger order."""
+        try:
+            self._api.cancel_trigger_order(order_id)
+            audit('broker', 'GTT_CANCEL_OK', order_id=order_id)
+        except Exception as e:
+            audit('broker', 'GTT_CANCEL_FAIL', order_id=order_id, error=str(e))
 
     def has_symbol(self, sym: str) -> bool:
         return sym in self._api.SCRIP_CODES

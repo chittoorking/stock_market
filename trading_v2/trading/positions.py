@@ -153,7 +153,7 @@ class PositionManager:
                         import time; time.sleep(2)
             else:
                 sell_ok = False
-                log.critical(f'ALL 3 EXIT ATTEMPTS FAILED: {pos.symbol} qty={pos.qty} — BROKER WILL AUTO-SQUARE')
+                log.critical(f'ALL 5 EXIT ATTEMPTS FAILED: {pos.symbol} qty={pos.qty} — BROKER WILL AUTO-SQUARE')
                 # Send Telegram alert
                 try:
                     import requests
@@ -238,8 +238,10 @@ class PositionManager:
     def _save_to_disk(self):
         """Save all positions to JSON file."""
         try:
+            with self._lock:
+                positions_snapshot = list(self._positions.values())
             data = []
-            for pos in self._positions.values():
+            for pos in positions_snapshot:
                 data.append({
                     'id': pos.id, 'symbol': pos.symbol, 'side': pos.side.value,
                     'qty': pos.qty, 'entry_price': pos.entry_price,
@@ -254,7 +256,7 @@ class PositionManager:
                     'trail_activate_pct': pos.trail_activate_pct,
                     'trail_pct': pos.trail_pct, 'peak_price': pos.peak_price,
                     'trail_active': pos.trail_active,
-                    'fno_sec_id': pos.fno_sec_id, 'trade_id': pos.trade_id,
+                    'fno_sec_id': pos.fno_sec_id, 'fno_lot_size': pos.fno_lot_size, 'fno_margin': pos.fno_margin, 'trade_id': pos.trade_id,
                     'opened_at': pos.opened_at,
                 })
             _PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -281,7 +283,7 @@ class PositionManager:
                     trail_pct=d.get('trail_pct', 0),
                     peak_price=d.get('peak_price', d['entry_price']),
                     trail_active=d.get('trail_active', False),
-                    fno_sec_id=d.get('fno_sec_id', ''),
+                    fno_sec_id=d.get('fno_sec_id', ''), fno_lot_size=d.get('fno_lot_size', 0), fno_margin=d.get('fno_margin', 0),
                     trade_id=d.get('trade_id', ''),
                     opened_at=d.get('opened_at', ''),
                 )

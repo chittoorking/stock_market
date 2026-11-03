@@ -10,4 +10,8 @@ done
 sleep 2
 
 cd /home/ai18developer/news-trading/trading_v2
-exec /home/ai18developer/news-trading/venv/bin/python3 -u -m trading.main
+/home/ai18developer/news-trading/venv/bin/python3 -u -m trading.main &
+BOT_PID=$!
+echo $BOT_PID > /tmp/trading_v2.pid
+echo "Started trading bot pid=$BOT_PID"
+wait $BOT_PID
