@@ -17,13 +17,16 @@ Status: 5W 0L on paper. Need 20+ confirmed trades before going live.
 """
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from trading.base_agent import BaseAgent
 from trading.types import Side
 from trading.services import rss, gemini, orb
+from trading.services.ml_enricher import get_ml_snapshot
 from trading.logger import audit
+from live.indmoney_client import tick_round
+import trading.services.ml_enricher as mle
 
 _STATE_FILE = Path(__file__).parent.parent.parent.parent / 'live' / 'data' / 'news_orb_state.json'
 _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -46,7 +49,6 @@ class NewsOrbAgent(BaseAgent):
 
     def _sleep_until_next_day(self):
         """Sleep until next weekday 9:05 AM."""
-        from datetime import timedelta
         now = datetime.now()
         tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=5, second=0, microsecond=0)
         # Skip weekends
@@ -141,7 +143,6 @@ class NewsOrbAgent(BaseAgent):
         for t in filtered:
             sym = t['nse_symbol']
             try:
-                from trading.services.ml_enricher import get_ml_snapshot
                 ml = get_ml_snapshot(sym)
                 if ml:
                     baseline[sym] = {
@@ -186,8 +187,6 @@ class NewsOrbAgent(BaseAgent):
         confirmed = []
         for sym, bl in baseline.items():
             try:
-                from trading.services.ml_enricher import get_ml_snapshot
-                import trading.services.ml_enricher as mle
                 mle._cache_time = 0
                 mle._poll()
                 ml = get_ml_snapshot(sym)
@@ -307,12 +306,11 @@ class NewsOrbAgent(BaseAgent):
                     continue
 
                 # Wait for fill
-                import time as _t
-                _t.sleep(5)
+                time.sleep(5)
                 _filled, _fill_price = self._broker.order_filled(order_id)
                 if not _filled:
                     # Wait 10 more seconds
-                    _t.sleep(10)
+                    time.sleep(10)
                     _filled, _fill_price = self._broker.order_filled(order_id)
                 if not _filled:
                     self._log.warning(f'{sym}: order not filled, cancelling')
@@ -351,7 +349,6 @@ class NewsOrbAgent(BaseAgent):
                 self._log.info(f'ENTRY {direction} {sym} qty={qty} @ {actual_entry:.1f} SL={sl:.1f}')
 
                 # Place GTT SL at exchange
-                from live.indmoney_client import tick_round
                 if direction == 'BUY':
                     _sl_trigger = tick_round(sl)
                     _sl_limit = tick_round(sl * 0.995)  # 0.5% below trigger

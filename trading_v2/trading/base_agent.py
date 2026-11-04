@@ -7,6 +7,7 @@ Two types:
 submit(TradeRequest) handles: FM → broker → position creation.
 If anything fails, capital is released. No phantoms.
 """
+import re
 from typing import Optional
 
 from trading.types import TradeRequest, Side, Position
@@ -134,7 +135,6 @@ class BaseAgent:
         """Get F&O lot size."""
         clean = sym.replace(' 50', '').replace(' ', '').strip().upper()
         # Strip expiry suffix: NATURALGAS26SEPFUT → NATURALGAS
-        import re
         base_with_m = re.sub(r'\d{2}[A-Z]{3}FUT$', '', clean)  # GOLDM26NOVFUT → GOLDM
         base_without_m = base_with_m.rstrip('M') or clean         # GOLDM → GOLD
         return (self._LOT_SIZES.get(clean)

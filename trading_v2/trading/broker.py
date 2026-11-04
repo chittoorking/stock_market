@@ -4,8 +4,10 @@ Every method raises BrokerError on failure. Never returns None silently.
 Every order is audit-logged before and after.
 Network-resilient: retries API calls 3x with backoff before giving up.
 """
+import requests
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Ensure news-trading root is importable (for `from live import indmoney_client`)
@@ -25,7 +27,6 @@ class BrokerError(Exception):
 def _retry(fn, retries=3, delay=2, label=''):
     """Retry a callable up to `retries` times with exponential backoff.
     Only retries on network/timeout errors, NOT on business logic errors."""
-    import requests
     last_err = None
     for attempt in range(retries):
         try:
@@ -129,7 +130,6 @@ class Broker:
         # Try index LTP first
         idx_scrip = self._INDEX_SCRIPS.get(sym) or self._INDEX_SCRIPS.get(sym.upper())
         if idx_scrip:
-            import requests
             def _idx_ltp():
                 h = {'Authorization': self._api.get_token()}
                 r = requests.get(f'https://api.indstocks.com/market/quotes/ltp?scrip-codes={idx_scrip}',
@@ -159,7 +159,6 @@ class Broker:
 
     def ltp_by_sec_id(self, sec_id: str, sym: str = '') -> float:
         """Get LTP for F&O instrument using numeric security_id."""
-        import requests
         def _fno_ltp():
             h = {"Authorization": self._api.get_token()}
             r = requests.get(f"https://api.indstocks.com/market/quotes/ltp?scrip-codes=NFO_{sec_id}",
@@ -223,8 +222,6 @@ class Broker:
 
     def option_chain(self, sym: str, expiry: str = '') -> list:
         """Get option chain. Works for indices, equities, and MCX."""
-        import requests
-        from datetime import datetime, timedelta
 
         # 1. Index options (NIFTY, BANKNIFTY, SENSEX)
         clean = sym.replace(' 50', '').replace(' ', '').strip().upper()
@@ -242,8 +239,6 @@ class Broker:
 
     def _index_option_chain(self, exchange: str, underlying_id: str, expiry: str = '') -> list:
         """Get index option chain from INDstocks API."""
-        import requests
-        from datetime import datetime, timedelta
 
         if not expiry:
             # Find nearest weekly expiry
@@ -268,7 +263,6 @@ class Broker:
 
     def _fetch_index_chain(self, exchange: str, underlying_id: str, expiry: str) -> list:
         """Fetch index option chain for a specific expiry."""
-        import requests
         try:
             h = {'Authorization': self._api.get_token(), 'Content-Type': 'application/json'}
             params = {
@@ -308,8 +302,6 @@ class Broker:
 
     def _mcx_option_chain(self, sym: str) -> list:
         """Build option chain from MCX instrument master for GOLD/CRUDEOIL/SILVER."""
-        import requests
-        from datetime import datetime
         try:
             h = {'Authorization': self._api.get_token()}
             r = requests.get('https://api.indstocks.com/market/instruments?source=mcx',
@@ -344,8 +336,7 @@ class Broker:
                 # Only nearest expiry
                 expiry_str = parts[4].strip()
                 try:
-                    from datetime import datetime as dt
-                    expiry = dt.strptime(expiry_str, '%d %b %Y')
+                    expiry = datetime.strptime(expiry_str, '%d %b %Y')
                     if expiry < today:
                         continue
                 except:
@@ -378,7 +369,6 @@ class Broker:
 
     def get_fno_margin(self, sec_id: str, qty: int, side: str, price: float) -> float:
         """Get actual SPAN+Exposure margin from INDmoney API. Returns 0 if unavailable."""
-        import requests
         try:
             r = requests.get(f"https://api.indstocks.com/margin",
                              headers={"Authorization": self._api.get_token()},

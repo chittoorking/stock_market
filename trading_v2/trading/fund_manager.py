@@ -6,7 +6,9 @@ Strategy decides trade size. Fund manager only checks:
   3. Max 5 per strategy
   4. Daily loss > 5% → kill switch
 """
+import os
 import re
+import sys
 import threading
 from datetime import datetime
 
@@ -14,15 +16,15 @@ from trading.logger import audit, get_logger
 
 log = get_logger('fund_manager')
 
+sys.path.insert(0, os.path.expanduser('~/news-trading'))
+from live.indmoney_client import get_funds
+
 from trading.config import MAX_CONCURRENT as MAX_TOTAL, MAX_PER_STRATEGY, DAILY_LOSS_PCT, EQUITY_RISK_PCT
 
 
 class FundManager:
     def __init__(self, pool: float = 100_000, **kwargs):
         try:
-            import sys, os
-            sys.path.insert(0, os.path.expanduser('~/news-trading'))
-            from live.indmoney_client import get_funds
             bal = get_funds()
             if bal and bal > 0:
                 self.pool = bal
@@ -166,9 +168,6 @@ class FundManager:
             self._loss_hit_fno = False
             # Don't clear _deployed — other agents may have overnight positions
         try:
-            import sys, os
-            sys.path.insert(0, os.path.expanduser('~/news-trading'))
-            from live.indmoney_client import get_funds
             bal = get_funds()
             if bal and bal > 0:
                 self.pool = bal

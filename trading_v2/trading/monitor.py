@@ -11,8 +11,10 @@ Every close goes through positions.close() → sell order + FM release.
 """
 import threading
 import time
+import traceback
 from datetime import datetime
 
+from trading.broker import _retry
 from trading.types import Side
 from trading.logger import audit, get_logger
 
@@ -37,7 +39,6 @@ class Monitor:
         self._running = False
 
     def _loop(self):
-        import traceback
         while self._running:
             try:
                 self._tick()
@@ -112,7 +113,6 @@ class Monitor:
         # REST fallback for any WebSocket misses
         if ws_miss:
             try:
-                from trading.broker import _retry
                 rest_prices = _retry(lambda: self._broker._api.get_ltp(ws_miss),
                                      retries=3, delay=2, label='BATCH_LTP')
                 prices.update(rest_prices)
@@ -182,12 +182,11 @@ class Monitor:
 
     def _exit(self, pos_id: str, exit_price: float = 0, reason: str = 'MANUAL'):
         # Run close in thread to avoid blocking WebSocket
-        import threading as _th
         def _do_exit():
             pos = self._pos.close(pos_id, exit_price=exit_price, reason=reason)
             if pos and pos.trade_id:
                 self._fm.release(pos.trade_id, pnl=pos.pnl)
-        _th.Thread(target=_do_exit, daemon=True).start()
+        threading.Thread(target=_do_exit, daemon=True).start()
 
     def on_price(self, instrument: str, price: float):
         """Called by WebSocket on every tick. Check SL/trail instantly.

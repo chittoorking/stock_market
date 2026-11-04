@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Optional
 
 from trading.types import Position, Side
+import requests
+import time
+
+from live.indmoney_client import headers as ind_headers
 from trading.logger import audit, get_logger, tg_alert
 
 log = get_logger('positions')
@@ -43,7 +47,7 @@ class PositionManager:
                            entry_price=entry_price, order_id=order_id,
                            strategy=strategy, peak_price=entry_price, **kw)
             self._positions[pid] = pos
-            import time as _t; pos._opened_at = _t.time()
+            pos._opened_at = time.time()
 
         audit('positions', 'OPEN', symbol, pos_id=pid, side=side.value,
               qty=qty, entry=entry_price, order_id=order_id, strategy=strategy)
@@ -72,13 +76,11 @@ class PositionManager:
         # Prevents creating new position if user already closed manually
         if not skip_sell:
             try:
-                import requests as _req
-                from live.indmoney_client import headers as _headers
                 is_fno = bool(getattr(pos, 'fno_sec_id', ''))
                 _mcx = any(m in pos.symbol.upper() for m in ('SILVERM', 'GOLDM', 'CRUDEOILM', 'NATURALGAS', 'NATGASMINI'))
                 segment = 'commodity' if _mcx else ('derivative' if is_fno else 'equity')
-                _r = _req.get(f'https://api.indstocks.com/portfolio/positions?segment={segment}&product=intraday',
-                             headers=_headers(), timeout=10)
+                _r = requests.get(f'https://api.indstocks.com/portfolio/positions?segment={segment}&product=intraday',
+                             headers=ind_headers(), timeout=10)
                 broker_pos = []
                 if _r.status_code == 200:
                     _data = _r.json().get('data', {})
@@ -146,17 +148,16 @@ class PositionManager:
                     else:
                         log.error(f'EXIT ORDER RETURNED NONE: {pos.symbol} attempt={attempt+1}')
                         if attempt < 4:
-                            import time; time.sleep(2)
+                            time.sleep(2)
                 except Exception as e:
                     log.critical(f'EXIT ORDER FAILED {pos.symbol} attempt={attempt+1}: {e}')
                     if attempt < 4:
-                        import time; time.sleep(2)
+                        time.sleep(2)
             else:
                 sell_ok = False
                 log.critical(f'ALL 5 EXIT ATTEMPTS FAILED: {pos.symbol} qty={pos.qty} — BROKER WILL AUTO-SQUARE')
                 # Send Telegram alert
                 try:
-                    import requests
                     requests.post('https://api.telegram.org/bot8831033342:AAGstfFaVjPPvSykkCwfQIS9O8iYujqHivs/sendMessage',
                         json={'chat_id': '866752968',
                               'text': f'EXIT FAILED: {pos.symbol} qty={pos.qty} — close manually NOW to avoid auto-square penalty!'},
@@ -167,7 +168,7 @@ class PositionManager:
         # Get actual fill price from order book
         if sell_ok and not skip_sell:
             try:
-                import time as _t; _t.sleep(1)
+                time.sleep(1)
                 book = self._broker._api.get_order_book() or []
                 for _o in book:
                     _oid = str(_o.get('id', ''))

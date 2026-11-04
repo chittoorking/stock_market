@@ -28,6 +28,9 @@ from trading.fund_manager import FundManager
 from trading.monitor import Monitor
 from trading.server import TradingServer
 from trading.logger import get_logger
+from live.price_feed import PriceFeed
+
+import requests
 
 log = get_logger('main')
 
@@ -50,7 +53,6 @@ TG_CHAT = '866752968'
 
 def _tg(msg):
     try:
-        import requests
         requests.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
                       json={'chat_id': TG_CHAT, 'text': msg}, timeout=5)
     except Exception:
@@ -86,7 +88,6 @@ def main():
     fm = FundManager(pool=args.pool)
 
     # WebSocket price feed for real-time LTP
-    from live.price_feed import PriceFeed
     pf = PriceFeed()
     pf.start(broker._api.get_token())
 

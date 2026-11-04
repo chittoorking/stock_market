@@ -20,12 +20,15 @@ Validated: 29W 0L = 100% WR over 18 days. No data-mined filters.
 """
 
 import time
-from datetime import datetime
+import traceback
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 
 from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import get_logger, tg_alert
+import trading.services.ml_enricher as mle
+from trading.services.ml_enricher import _poll, _cache
 
 
 # Config
@@ -178,11 +181,10 @@ class PullbackAgent(BaseAgent):
                 self._run_day()
             except Exception as e:
                 self._log.error(f'Day failed: {e}')
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
             self._sleep_until_next_day()
 
     def _sleep_until_next_day(self):
-        from datetime import timedelta
         now = datetime.now()
         tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=18, second=0)
         while tomorrow.weekday() >= 5:
@@ -238,8 +240,6 @@ class PullbackAgent(BaseAgent):
 
     def _fetch_market_lens(self):
         try:
-            from trading.services.ml_enricher import _poll, _cache
-            import trading.services.ml_enricher as mle
             mle._cache_time = 0
             _poll()
 

@@ -1,11 +1,13 @@
-import os
 """Multyfi Options Agent — polls Multyfi API, scores signals, trades.
 
 Thin agent: delegates to services for API calls, scoring, symbol resolution.
 This file only handles: polling loop, signal routing, dedup, queue.
 """
+import json
+import os
 import re
 import time
+import requests
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
@@ -14,6 +16,8 @@ from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import audit, tg_alert
 from trading.services import multyfi_api, multyfi_scoring, symbol_resolver
+import trading.services.ml_enricher as mle
+from trading.services.ml_enricher import _poll, _cache
 
 from trading.config import (PE_MIN_SCORE, CE_MIN_SCORE, FUT_MIN_SCORE,
                            OPTIONS_SL_PCT, MCX_COMMODITIES, TG_TOKEN, TG_CHAT_ID)
@@ -24,8 +28,6 @@ def _get_market_structure():
     """Snapshot market breadth from ML scan data.
     Returns: {stocks_down_pct, below_vwap_pct, dlv_rising_pct} or None."""
     try:
-        from trading.services.ml_enricher import _poll, _cache
-        import trading.services.ml_enricher as mle
         mle._cache_time = 0
         _poll()
 
@@ -79,9 +81,8 @@ class MulOptions(BaseAgent):
         # Load persisted seen signals
         self._seen_file = os.path.expanduser('~/multyfi_seen.json')
         try:
-            import json as _json
             with open(self._seen_file) as _f:
-                self._seen = set(_json.load(_f))
+                self._seen = set(json.load(_f))
         except Exception:
             pass
         if len(self._seen) > 500:
@@ -136,8 +137,7 @@ class MulOptions(BaseAgent):
     def _handle_premium_item(self, opt: dict):
         """Route signal from /options/premium or /futures/premium."""
         # Block orders outside market hours
-        from datetime import datetime as _dt
-        _now = _dt.now()
+        _now = datetime.now()
         _mcx_close = 23  # MCX closes at 11:30 PM
         _nse_close = 15  # NSE closes at 3:30 PM
         is_mcx = any(c in str(opt.get('baseSymbol', '')).upper() for c in ('GOLD', 'SILVER', 'CRUDE', 'NATURAL', 'COPPER'))
@@ -174,9 +174,8 @@ class MulOptions(BaseAgent):
         self._seen.add(sig_key)
         # Persist seen signals to survive restarts
         try:
-            import json as _json
             with open(self._seen_file, 'w') as _f:
-                _json.dump(list(self._seen), _f)
+                json.dump(list(self._seen), _f)
         except Exception:
             pass
 
@@ -264,9 +263,8 @@ class MulOptions(BaseAgent):
         self._seen.add(sig_key)
         # Persist seen signals
         try:
-            import json as _j
             with open(self._seen_file, 'w') as _f:
-                _j.dump(list(self._seen), _f)
+                json.dump(list(self._seen), _f)
         except Exception:
             pass
 
@@ -340,8 +338,6 @@ class MulOptions(BaseAgent):
         # Delivery change filter — only enter if institutions confirm
         # dlv_chg > 0 = 100% WR on 18-day backtest (7W 0L)
         try:
-            from trading.services.ml_enricher import _poll, _cache
-            import trading.services.ml_enricher as mle
             mle._cache_time = 0
             _poll()
             ml_data = mle._cache.get(sym, {})
@@ -470,8 +466,7 @@ class MulOptions(BaseAgent):
                 # Crude/NatGas: PAPER — log and skip
                 self._log.info(f'PAPER MCX {action} {sym} @ {entry_price} SL={sl_pct:.1f}%')
                 try:
-                    import requests as _req
-                    _req.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
+                    requests.post(f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage',
                               json={'chat_id': TG_CHAT_ID,
                                     'text': f'PAPER MCX {action} {sym} @ {entry_price} SL={sl_pct:.1f}%'},
                               timeout=5)
@@ -689,8 +684,7 @@ class MulOptions(BaseAgent):
             # Extract strike from instrument if missing (e.g. NFO:NIFTY26O1322700PE -> 22700)
             if not strike:
                 inst = doc.get('instrument', doc.get('stockSymbol', ''))
-                import re as _re
-                m = _re.search(r'(\d{4,6})(CE|PE)', str(inst))
+                m = re.search(r'(\d{4,6})(CE|PE)', str(inst))
                 if m:
                     strike = int(m.group(1))
             entry_price = doc.get('entryPrice', 0)

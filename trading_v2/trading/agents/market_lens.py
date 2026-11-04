@@ -14,12 +14,15 @@ Exit: SL 1.5%, trail +0.3%/0.3%, square-off 3:15 PM.
 Validated: 37W 0L = 100% WR over 18 days.
 """
 import time
-from datetime import datetime
+import traceback
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 
 from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import get_logger, tg_alert
+import trading.services.ml_enricher as mle
+from trading.services.ml_enricher import _poll, _cache
 
 
 # Config
@@ -138,11 +141,10 @@ class MarketLensAgent(BaseAgent):
                 self._run_day()
             except Exception as e:
                 self._log.error(f'Day failed: {e}')
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
             self._sleep_until_next_day()
 
     def _sleep_until_next_day(self):
-        from datetime import timedelta
         now = datetime.now()
         tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=18, second=0)
         while tomorrow.weekday() >= 5:
@@ -193,8 +195,6 @@ class MarketLensAgent(BaseAgent):
 
     def _fetch_market_lens(self):
         try:
-            from trading.services.ml_enricher import _poll, _cache
-            import trading.services.ml_enricher as mle
             mle._cache_time = 0
             _poll()
 

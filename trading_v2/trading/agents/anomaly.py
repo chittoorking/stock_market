@@ -27,15 +27,21 @@ Anomaly score (0-8, all sector-relative):
 
 Backtest: 25W 0L = 100% WR across 7 days (Sep 30 - Oct 9, 2026).
 """
+import json
 import time
-from datetime import datetime
+import traceback
+import yfinance as yf
+from datetime import datetime, timedelta
 from collections import defaultdict
+from pathlib import Path
 
 from trading.base_agent import BaseAgent
 from trading.types import TradeRequest, Side
 from trading.logger import audit, get_logger, tg_alert
 from live.indmoney_client import tick_round
 from trading.services import price_tracker
+import trading.services.ml_enricher as mle
+from trading.services.ml_enricher import _poll
 
 
 # Heartbeat scans - when to scan for anomalies
@@ -66,11 +72,10 @@ class AnomalyAgent(BaseAgent):
                 self._run_day()
             except Exception as e:
                 self._log.error(f'Day failed: {e}')
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
             self._sleep_until_next_day()
 
     def _sleep_until_next_day(self):
-        from datetime import timedelta
         now = datetime.now()
         tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=18, second=0)
         while tomorrow.weekday() >= 5:
@@ -110,7 +115,7 @@ class AnomalyAgent(BaseAgent):
                 self._scan_and_trade()
             except Exception as e:
                 self._log.error(f'Scan error: {e}')
-                import traceback; traceback.print_exc()
+                traceback.print_exc()
 
         self._log.info('=== ANOMALY AGENT DONE ===')
 
@@ -238,14 +243,12 @@ class AnomalyAgent(BaseAgent):
         # Check for SL hits -- block re-entry for those tickers
         # Scan today's audit for ANY closed position (SL_HIT or GTT_FIRED)
         try:
-            from pathlib import Path
-            import json as _json
             today = datetime.now().strftime('%Y%m%d')
             audit_file = Path(__file__).parent.parent.parent.parent / 'live' / 'logs' / f'audit_{today}.jsonl'
             if audit_file.exists():
                 for line in open(audit_file):
                     try:
-                        r = _json.loads(line)
+                        r = json.loads(line)
                     except Exception:
                         continue
                     if (r.get('component') == 'monitor'
@@ -282,7 +285,6 @@ class AnomalyAgent(BaseAgent):
 
             # Liquidity filter: skip illiquid stocks (can't exit cleanly)
             try:
-                import yfinance as yf
                 _yf_info = yf.Ticker(sym + '.NS').info
                 _avg10d = _yf_info.get('averageDailyVolume10Day', 0) or 0
                 if _avg10d < 5000:
@@ -363,7 +365,7 @@ class AnomalyAgent(BaseAgent):
                     self._log.warning(f'{sym}: cancel failed: {e}')
 
                 # Verify cancel -- order may have filled during cancel
-                import time as _t; _t.sleep(1)
+                time.sleep(1)
                 _late_fill, _late_price = self._broker.order_filled(p['order_id'])
                 if _late_fill:
                     self._log.warning(f'{sym}: order filled AFTER cancel attempt!')
@@ -543,7 +545,7 @@ class AnomalyAgent(BaseAgent):
                     except Exception:
                         self._log.warning(f'{sym}: cancel on no-fill may have failed')
                     # Check if order filled during cancel (race condition)
-                    import time as _t; _t.sleep(1)
+                    time.sleep(1)
                     _late_fill, _late_price = self._broker.order_filled(p['order_id'])
                     if _late_fill:
                         self._log.warning(f'{sym}: second chance order filled AFTER cancel!')
@@ -636,8 +638,6 @@ class AnomalyAgent(BaseAgent):
     def _fetch_market_lens(self):
         """Fetch all stocks from NSE Market Lens."""
         try:
-            from trading.services.ml_enricher import _poll
-            import trading.services.ml_enricher as mle
 
             # Force fresh poll
             mle._cache_time = 0
@@ -677,5 +677,5 @@ class AnomalyAgent(BaseAgent):
             return stocks
         except Exception as e:
             self._log.error(f'Market Lens fetch failed: {e}')
-            import traceback; traceback.print_exc()
+            traceback.print_exc()
             return []
