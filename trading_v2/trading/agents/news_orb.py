@@ -75,7 +75,50 @@ class NewsOrbAgent(BaseAgent):
             step = state.get('step', '')
             self._log.info(f'RECOVERED state: step={step}')
 
-            if step == 'waiting_confirmation':
+            if step == 'trades_found':
+                trades = state.get('trades', [])
+                if trades:
+                    self._log.info(f'Recovering {len(trades)} trades from scan phase')
+                    # Re-run from OR collection onwards
+                    symbols = list(set(t['nse_symbol'] for t in trades))
+                    self._log.info(f'Collecting OR for {len(symbols)} stocks: {symbols}')
+                    or_data = orb.collect_range(self._broker, symbols)
+                    filtered = orb.apply_filters(trades, or_data)
+                    if not filtered:
+                        self._log.info('No trades passed ORB filters on recovery')
+                        self._save_state({'date': date_str, 'step': 'done'})
+                        return
+                    # Build baseline and continue to confirmation
+                    baseline = {}
+                    for t in filtered:
+                        sym = t['nse_symbol']
+                        try:
+                            ml = get_ml_snapshot(sym)
+                            if ml:
+                                baseline[sym] = {
+                                    'ltp': ml.get('lastTradedPrice', 0),
+                                    'dlv': ml.get('deliveryPercentage', 0),
+                                    'direction': t.get('call', t.get('direction', 'BUY')),
+                                    'trade': t,
+                                    'projection': t.get('projection', 0),
+                                    'prev_close': t.get('prev_close', 0),
+                                }
+                        except Exception as e:
+                            self._log.error(f'Baseline error {sym}: {e}')
+                    if baseline:
+                        self._save_state({'date': date_str, 'step': 'waiting_confirmation', 'baseline': baseline})
+                        now = datetime.now()
+                        if now.hour < 11 or (now.hour == 11 and now.minute < 12):
+                            target = now.replace(hour=11, minute=12, second=0)
+                            wait = (target - now).total_seconds()
+                            if wait > 0:
+                                self._log.info(f'Waiting {wait:.0f}s for 11:12 confirmation')
+                                time.sleep(wait)
+                        self._do_confirmation(baseline)
+                    self._clear_state()
+                    return
+
+            elif step == 'waiting_confirmation':
                 baseline = state.get('baseline', {})
                 if baseline:
                     self._log.info(f'Resuming with {len(baseline)} baselines')
@@ -120,6 +163,13 @@ class NewsOrbAgent(BaseAgent):
             self._save_state({'date': date_str, 'step': 'done'})
             return
 
+        # Save trades for crash recovery
+        self._save_state({
+            'date': date_str,
+            'step': 'trades_found',
+            'trades': trades,
+        })
+
         # Phase 2: Wait for OR window (9:15-9:30)
         if not self._wait_for_or_window():
             self._log.error('Missed OR window')
@@ -162,12 +212,11 @@ class NewsOrbAgent(BaseAgent):
             self._save_state({'date': date_str, 'step': 'done'})
             return
 
-        # SAVE STATE — survives restart
+        # SAVE STATE — survives restart (save EVERYTHING for clean recovery)
         self._save_state({
             'date': date_str,
             'step': 'waiting_confirmation',
-            'baseline': {sym: {k: v for k, v in bl.items() if k != 'trade'}
-                         for sym, bl in baseline.items()},
+            'baseline': baseline,
         })
         self._log.info(f'State saved: {len(baseline)} baselines')
 
