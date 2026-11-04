@@ -319,9 +319,12 @@ class MulOptions(BaseAgent):
             self._log.info(f'{sym}: already in position')
             return
 
-        # VWAP filter — only enter if price > today's VWAP
+        # VWAP filter — only enter if price aligned with VWAP
         try:
-            vwap = self._broker.get_vwap(sym)
+            mle._cache_time = 0
+            mle._poll()
+            ml_data = mle._cache.get(sym, {})
+            vwap = ml_data.get('avgPrice', 0) or 0
             if vwap and vwap > 0:
                 if action == 'BUY' and entry_price < vwap:
                     self._log.info(f'SKIP {sym}: price {entry_price} < VWAP {vwap:.1f}')
