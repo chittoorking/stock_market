@@ -112,16 +112,36 @@ class BaseAgent:
             self._fm.release(trade_id, pnl=0)
             return None
 
-        # 4. Position (only after confirmed order)
+        # 4. Get actual fill price from order book
+        time.sleep(1)  # brief wait for order to settle
+        _filled, _fill_price = self._broker.order_filled(oid)
+        if _fill_price and _fill_price > 0:
+            actual_entry = _fill_price
+            self._log.info(f'{req.symbol}: fill price={actual_entry:.2f} (LTP was {entry:.2f})')
+        else:
+            actual_entry = entry  # fallback to LTP if fill price unavailable
+
+        # Recalculate SL based on actual fill, not LTP
+        if req.sl > 0 and entry > 0 and actual_entry != entry:
+            sl_pct = abs(req.sl - entry) / entry
+            if req.side == Side.BUY:
+                actual_sl = actual_entry * (1 - sl_pct)
+            else:
+                actual_sl = actual_entry * (1 + sl_pct)
+            self._log.info(f'{req.symbol}: SL adjusted {req.sl:.2f} -> {actual_sl:.2f} (based on fill)')
+        else:
+            actual_sl = req.sl
+
+        # 5. Position with actual fill price
         pos = self._positions.open(
             symbol=req.symbol, side=req.side, qty=qty,
-            entry_price=entry, order_id=oid, strategy=self.name,
-            sl=req.sl, target=req.target,
+            entry_price=actual_entry, order_id=oid, strategy=self.name,
+            sl=actual_sl, target=req.target,
             trail_activate_pct=req.trail_activate_pct,
             trail_pct=req.trail_pct,
             fno_sec_id=req.fno_sec_id, trade_id=trade_id,
         )
-        self._log.info(f'OPENED: {req.symbol} {req.side.value} qty={qty} @ {entry} | {req.reason}')
+        self._log.info(f'OPENED: {req.symbol} {req.side.value} qty={qty} @ {actual_entry:.2f} | {req.reason}')
         return pos.id
 
     # Known lot sizes for index/commodity F&O
