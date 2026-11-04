@@ -72,7 +72,7 @@ def collect_range(broker, symbols: list[str], poll_seconds: int = 15) -> dict:
                     price = broker.ltp_safe(sym)
                     if price > 0:
                         break
-                    import time; time.sleep(2)
+                    __import__("time").sleep(2)
                 if price > 0:
                     data[sym]['open'] = price
                     data[sym]['high'] = price
@@ -88,7 +88,7 @@ def collect_range(broker, symbols: list[str], poll_seconds: int = 15) -> dict:
                 price = broker.ltp_safe(sym)
                 if price > 0:
                     break
-                import time; time.sleep(2)
+                __import__("time").sleep(2)
             if price > 0:
                 data[sym]['open'] = price
                 data[sym]['high'] = price
